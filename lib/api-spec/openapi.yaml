@@ -170,6 +170,102 @@ paths:
                 $ref: "#/components/schemas/ProposalActionResult"
         "400":
           description: Invalid or unavailable proposal
+  /ai/change-proposal/commit-review:
+    post:
+      operationId: getChangeProposalCommitReview
+      tags: [ai]
+      summary: Review a validated local change before commit approval
+      description: Returns a server-verified commit review. No GitHub write occurs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Commit review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitReview"
+        "400":
+          description: Proposal has not passed local validation
+        "409":
+          description: Validated files changed after local validation
+  /ai/change-proposal/commit:
+    post:
+      operationId: commitChangeProposal
+      tags: [ai]
+      summary: Commit an approved validated local change
+      description: Requires explicit commit approval. The configured GitHub provider performs no operation until enabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitChangeProposalInput"
+      responses:
+        "200":
+          description: Commit result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitResult"
+        "400":
+          description: Invalid proposal or commit message
+        "403":
+          description: Protected file rejected
+        "409":
+          description: Repository or branch conflict
+        "503":
+          description: GITHUB_PROVIDER_NOT_CONFIGURED
+  /ai/change-proposal/push-review:
+    post:
+      operationId: getChangeProposalPushReview
+      tags: [ai]
+      summary: Review a created commit before push approval
+      description: Returns a server-held commit for explicit push confirmation. No push occurs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Push review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushReview"
+        "400":
+          description: No approved commit exists
+  /ai/change-proposal/push:
+    post:
+      operationId: pushChangeProposal
+      tags: [ai]
+      summary: Push an approved commit without force
+      description: Requires explicit push approval. The configured GitHub provider compares remote HEAD and never force-pushes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Push result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushResult"
+        "400":
+          description: No approved commit exists
+        "409":
+          description: Remote branch changed
+        "503":
+          description: GITHUB_PROVIDER_NOT_CONFIGURED
   /repository/connect:
     post:
       operationId: connectRepository
@@ -447,6 +543,55 @@ components:
         proposalId: { type: string }
         message: { type: string }
       required: [status, proposalId, message]
+    CommitReview:
+      type: object
+      properties:
+        status: { type: string, enum: [ready_to_commit] }
+        proposalId: { type: string }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        branch: { type: string }
+        files: { type: array, items: { type: string } }
+        addedLines: { type: number }
+        removedLines: { type: number }
+        diffSummary: { type: string }
+        validation: { type: string, enum: [passed] }
+      required: [status, proposalId, repository, branch, files, addedLines, removedLines, diffSummary, validation]
+    CommitChangeProposalInput:
+      type: object
+      properties:
+        proposalId: { type: string, minLength: 1 }
+        message: { type: string, minLength: 1, maxLength: 200 }
+      required: [proposalId, message]
+    CommitResult:
+      type: object
+      properties:
+        status: { type: string, enum: [committed] }
+        proposalId: { type: string }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        branch: { type: string }
+        commitSha: { type: string }
+        shortSha: { type: string }
+      required: [status, proposalId, repository, branch, commitSha, shortSha]
+    PushReview:
+      type: object
+      properties:
+        status: { type: string, enum: [ready_to_push] }
+        proposalId: { type: string }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        branch: { type: string }
+        commitSha: { type: string }
+        shortSha: { type: string }
+      required: [status, proposalId, repository, branch, commitSha, shortSha]
+    PushResult:
+      type: object
+      properties:
+        status: { type: string, enum: [pushed] }
+        proposalId: { type: string }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        branch: { type: string }
+        commitSha: { type: string }
+        shortSha: { type: string }
+      required: [status, proposalId, repository, branch, commitSha, shortSha]
     RepositoryContextUsed:
       type: object
       properties:

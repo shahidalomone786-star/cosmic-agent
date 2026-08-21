@@ -203,6 +203,124 @@ export const UndoChangeProposalResponse = zod.object({
 
 
 /**
+ * Returns a server-verified commit review. No GitHub write occurs.
+ * @summary Review a validated local change before commit approval
+ */
+
+
+
+export const GetChangeProposalCommitReviewBody = zod.object({
+  "proposalId": zod.string().min(1)
+})
+
+export const GetChangeProposalCommitReviewResponse = zod.object({
+  "status": zod.enum(['ready_to_commit']),
+  "proposalId": zod.string(),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "files": zod.array(zod.string()),
+  "addedLines": zod.number(),
+  "removedLines": zod.number(),
+  "diffSummary": zod.string(),
+  "validation": zod.enum(['passed'])
+})
+
+
+/**
+ * Requires explicit commit approval. The configured GitHub provider performs no operation until enabled.
+ * @summary Commit an approved validated local change
+ */
+
+export const commitChangeProposalBodyMessageMax = 200;
+
+
+
+export const CommitChangeProposalBody = zod.object({
+  "proposalId": zod.string().min(1),
+  "message": zod.string().min(1).max(commitChangeProposalBodyMessageMax)
+})
+
+export const CommitChangeProposalResponse = zod.object({
+  "status": zod.enum(['committed']),
+  "proposalId": zod.string(),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "commitSha": zod.string(),
+  "shortSha": zod.string()
+})
+
+
+/**
+ * Returns a server-held commit for explicit push confirmation. No push occurs.
+ * @summary Review a created commit before push approval
+ */
+
+
+
+export const GetChangeProposalPushReviewBody = zod.object({
+  "proposalId": zod.string().min(1)
+})
+
+export const GetChangeProposalPushReviewResponse = zod.object({
+  "status": zod.enum(['ready_to_push']),
+  "proposalId": zod.string(),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "commitSha": zod.string(),
+  "shortSha": zod.string()
+})
+
+
+/**
+ * Requires explicit push approval. The configured GitHub provider compares remote HEAD and never force-pushes.
+ * @summary Push an approved commit without force
+ */
+
+
+
+export const PushChangeProposalBody = zod.object({
+  "proposalId": zod.string().min(1)
+})
+
+export const PushChangeProposalResponse = zod.object({
+  "status": zod.enum(['pushed']),
+  "proposalId": zod.string(),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "commitSha": zod.string(),
+  "shortSha": zod.string()
+})
+
+
+/**
  * @summary Connect a read-only GitHub repository
  */
 export const ConnectRepositoryBody = zod.object({

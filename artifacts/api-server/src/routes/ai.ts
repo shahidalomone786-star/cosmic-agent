@@ -9,7 +9,8 @@ import { GroqProviderError } from "../ai/groq-provider";
 import { retrieveRepositoryContext, type RepositoryContextResult, type RepositoryRef } from "../repository/github-provider";
 import { CreateChangeProposalBody, CreateChangeProposalResponse } from "@workspace/api-zod";
 import { createChangeProposal, ProposalError, type ChangeProposal } from "../ai/change-proposal";
-import { executeProposal, registerProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
+import { commitProposal, executeProposal, getCommitReview, getPushReview, pushProposal, registerProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
+import { GitHubWriteProviderError } from "../repository/github-write-provider";
 
 const router: IRouter = Router();
 
@@ -34,7 +35,7 @@ router.post("/ai/change-proposal", async (req, res) => {
       parsed.data.repositoryContext.repository as RepositoryRef,
       parsed.data.repositoryContext.paths,
     );
-    registerProposal(proposal);
+    registerProposal(proposal, parsed.data.repositoryContext.repository as RepositoryRef);
     res.json(CreateChangeProposalResponse.parse(proposal));
   } catch (error) {
     sendProposalError(res, error);
@@ -60,6 +61,31 @@ router.post("/ai/change-proposal/undo", async (req, res) => {
   } catch (error) {
     sendExecutionError(res, error);
   }
+});
+
+router.post("/ai/change-proposal/commit-review", async (req, res) => {
+  const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
+  if (!proposalId) { res.status(400).json({ error: "Commit review requires a valid proposal.", code: "invalid_proposal" }); return; }
+  try { res.json(await getCommitReview(proposalId)); } catch (error) { sendExecutionError(res, error); }
+});
+
+router.post("/ai/change-proposal/commit", async (req, res) => {
+  const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
+  const message = typeof req.body?.message === "string" ? req.body.message : "";
+  if (!proposalId) { res.status(400).json({ error: "Commit approval requires a valid proposal.", code: "invalid_proposal" }); return; }
+  try { res.json(await commitProposal(proposalId, message)); } catch (error) { sendExecutionError(res, error); }
+});
+
+router.post("/ai/change-proposal/push-review", async (req, res) => {
+  const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
+  if (!proposalId) { res.status(400).json({ error: "Push review requires a valid proposal.", code: "invalid_proposal" }); return; }
+  try { res.json(getPushReview(proposalId)); } catch (error) { sendExecutionError(res, error); }
+});
+
+router.post("/ai/change-proposal/push", async (req, res) => {
+  const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
+  if (!proposalId) { res.status(400).json({ error: "Push approval requires a valid proposal.", code: "invalid_proposal" }); return; }
+  try { res.json(await pushProposal(proposalId)); } catch (error) { sendExecutionError(res, error); }
 });
 
 router.post("/ai/chat", async (req, res) => {
@@ -169,6 +195,10 @@ function sendProposalError(res: Response, error: unknown): void {
 }
 
 function sendExecutionError(res: Response, error: unknown): void {
+  if (error instanceof GitHubWriteProviderError) {
+    res.status(error.code === "conflict" ? 409 : 503).json({ error: error.message, code: error.code });
+    return;
+  }
   if (error instanceof PatchExecutionError) {
     const status = error.code === "stale_file" ? 409 : ["protected_file", "unsafe_path"].includes(error.code) ? 403 : ["binary_file", "too_large", "validation_failed"].includes(error.code) ? 422 : 400;
     res.status(status).json({ error: error.message, code: error.code });

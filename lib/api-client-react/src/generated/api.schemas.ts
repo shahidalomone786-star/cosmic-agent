@@ -176,6 +176,90 @@ export interface ProposalActionResult {
   message: string;
 }
 
+export type CommitReviewStatus = typeof CommitReviewStatus[keyof typeof CommitReviewStatus];
+
+
+export const CommitReviewStatus = {
+  ready_to_commit: 'ready_to_commit',
+} as const;
+
+export type CommitReviewValidation = typeof CommitReviewValidation[keyof typeof CommitReviewValidation];
+
+
+export const CommitReviewValidation = {
+  passed: 'passed',
+} as const;
+
+export interface CommitReview {
+  status: CommitReviewStatus;
+  proposalId: string;
+  repository: RepositoryRef;
+  branch: string;
+  files: string[];
+  addedLines: number;
+  removedLines: number;
+  diffSummary: string;
+  validation: CommitReviewValidation;
+}
+
+export interface CommitChangeProposalInput {
+  /** @minLength 1 */
+  proposalId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  message: string;
+}
+
+export type CommitResultStatus = typeof CommitResultStatus[keyof typeof CommitResultStatus];
+
+
+export const CommitResultStatus = {
+  committed: 'committed',
+} as const;
+
+export interface CommitResult {
+  status: CommitResultStatus;
+  proposalId: string;
+  repository: RepositoryRef;
+  branch: string;
+  commitSha: string;
+  shortSha: string;
+}
+
+export type PushReviewStatus = typeof PushReviewStatus[keyof typeof PushReviewStatus];
+
+
+export const PushReviewStatus = {
+  ready_to_push: 'ready_to_push',
+} as const;
+
+export interface PushReview {
+  status: PushReviewStatus;
+  proposalId: string;
+  repository: RepositoryRef;
+  branch: string;
+  commitSha: string;
+  shortSha: string;
+}
+
+export type PushResultStatus = typeof PushResultStatus[keyof typeof PushResultStatus];
+
+
+export const PushResultStatus = {
+  pushed: 'pushed',
+} as const;
+
+export interface PushResult {
+  status: PushResultStatus;
+  proposalId: string;
+  repository: RepositoryRef;
+  branch: string;
+  commitSha: string;
+  shortSha: string;
+}
+
 export interface RepositoryConnectInput {
   repositoryUrl: string;
   branch?: string;

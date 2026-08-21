@@ -26,10 +26,15 @@ import type {
   ChangeExecutionResult,
   ChangeProposal,
   ChangeProposalInput,
+  CommitChangeProposalInput,
+  CommitResult,
+  CommitReview,
   ExecuteChangeProposalInput,
   HealthStatus,
   ProposalActionInput,
   ProposalActionResult,
+  PushResult,
+  PushReview,
   RepositoryConnectInput,
   RepositoryEntry,
   RepositoryFile,
@@ -582,6 +587,294 @@ export const useUndoChangeProposal = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getUndoChangeProposalMutationOptions(options));
+    }
+
+export const getGetChangeProposalCommitReviewUrl = () => {
+
+
+
+
+  return `/api/ai/change-proposal/commit-review`
+}
+
+/**
+ * Returns a server-verified commit review. No GitHub write occurs.
+ * @summary Review a validated local change before commit approval
+ */
+export const getChangeProposalCommitReview = async (proposalActionInput: ProposalActionInput, options?: Parameters<typeof customFetch>[1]): Promise<CommitReview> => {
+
+  return customFetch<CommitReview>(getGetChangeProposalCommitReviewUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(proposalActionInput)
+  }
+);}
+
+
+
+
+
+export const getGetChangeProposalCommitReviewMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getChangeProposalCommitReview>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof getChangeProposalCommitReview>>, TError,{data: BodyType<ProposalActionInput>}, TContext> => {
+
+const mutationKey = ['getChangeProposalCommitReview'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof getChangeProposalCommitReview>>, {data: BodyType<ProposalActionInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  getChangeProposalCommitReview(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GetChangeProposalCommitReviewMutationResult = NonNullable<Awaited<ReturnType<typeof getChangeProposalCommitReview>>>
+    export type GetChangeProposalCommitReviewMutationBody = BodyType<ProposalActionInput>
+    export type GetChangeProposalCommitReviewMutationError = ErrorType<void>
+
+    /**
+ * @summary Review a validated local change before commit approval
+ */
+export const useGetChangeProposalCommitReview = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getChangeProposalCommitReview>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof getChangeProposalCommitReview>>,
+        TError,
+        {data: BodyType<ProposalActionInput>},
+        TContext
+      > => {
+      return useMutation(getGetChangeProposalCommitReviewMutationOptions(options));
+    }
+
+export const getCommitChangeProposalUrl = () => {
+
+
+
+
+  return `/api/ai/change-proposal/commit`
+}
+
+/**
+ * Requires explicit commit approval. The configured GitHub provider performs no operation until enabled.
+ * @summary Commit an approved validated local change
+ */
+export const commitChangeProposal = async (commitChangeProposalInput: CommitChangeProposalInput, options?: Parameters<typeof customFetch>[1]): Promise<CommitResult> => {
+
+  return customFetch<CommitResult>(getCommitChangeProposalUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(commitChangeProposalInput)
+  }
+);}
+
+
+
+
+
+export const getCommitChangeProposalMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof commitChangeProposal>>, TError,{data: BodyType<CommitChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof commitChangeProposal>>, TError,{data: BodyType<CommitChangeProposalInput>}, TContext> => {
+
+const mutationKey = ['commitChangeProposal'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof commitChangeProposal>>, {data: BodyType<CommitChangeProposalInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  commitChangeProposal(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CommitChangeProposalMutationResult = NonNullable<Awaited<ReturnType<typeof commitChangeProposal>>>
+    export type CommitChangeProposalMutationBody = BodyType<CommitChangeProposalInput>
+    export type CommitChangeProposalMutationError = ErrorType<void>
+
+    /**
+ * @summary Commit an approved validated local change
+ */
+export const useCommitChangeProposal = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof commitChangeProposal>>, TError,{data: BodyType<CommitChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof commitChangeProposal>>,
+        TError,
+        {data: BodyType<CommitChangeProposalInput>},
+        TContext
+      > => {
+      return useMutation(getCommitChangeProposalMutationOptions(options));
+    }
+
+export const getGetChangeProposalPushReviewUrl = () => {
+
+
+
+
+  return `/api/ai/change-proposal/push-review`
+}
+
+/**
+ * Returns a server-held commit for explicit push confirmation. No push occurs.
+ * @summary Review a created commit before push approval
+ */
+export const getChangeProposalPushReview = async (proposalActionInput: ProposalActionInput, options?: Parameters<typeof customFetch>[1]): Promise<PushReview> => {
+
+  return customFetch<PushReview>(getGetChangeProposalPushReviewUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(proposalActionInput)
+  }
+);}
+
+
+
+
+
+export const getGetChangeProposalPushReviewMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getChangeProposalPushReview>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof getChangeProposalPushReview>>, TError,{data: BodyType<ProposalActionInput>}, TContext> => {
+
+const mutationKey = ['getChangeProposalPushReview'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof getChangeProposalPushReview>>, {data: BodyType<ProposalActionInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  getChangeProposalPushReview(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GetChangeProposalPushReviewMutationResult = NonNullable<Awaited<ReturnType<typeof getChangeProposalPushReview>>>
+    export type GetChangeProposalPushReviewMutationBody = BodyType<ProposalActionInput>
+    export type GetChangeProposalPushReviewMutationError = ErrorType<void>
+
+    /**
+ * @summary Review a created commit before push approval
+ */
+export const useGetChangeProposalPushReview = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getChangeProposalPushReview>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof getChangeProposalPushReview>>,
+        TError,
+        {data: BodyType<ProposalActionInput>},
+        TContext
+      > => {
+      return useMutation(getGetChangeProposalPushReviewMutationOptions(options));
+    }
+
+export const getPushChangeProposalUrl = () => {
+
+
+
+
+  return `/api/ai/change-proposal/push`
+}
+
+/**
+ * Requires explicit push approval. The configured GitHub provider compares remote HEAD and never force-pushes.
+ * @summary Push an approved commit without force
+ */
+export const pushChangeProposal = async (proposalActionInput: ProposalActionInput, options?: Parameters<typeof customFetch>[1]): Promise<PushResult> => {
+
+  return customFetch<PushResult>(getPushChangeProposalUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(proposalActionInput)
+  }
+);}
+
+
+
+
+
+export const getPushChangeProposalMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pushChangeProposal>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof pushChangeProposal>>, TError,{data: BodyType<ProposalActionInput>}, TContext> => {
+
+const mutationKey = ['pushChangeProposal'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof pushChangeProposal>>, {data: BodyType<ProposalActionInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  pushChangeProposal(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PushChangeProposalMutationResult = NonNullable<Awaited<ReturnType<typeof pushChangeProposal>>>
+    export type PushChangeProposalMutationBody = BodyType<ProposalActionInput>
+    export type PushChangeProposalMutationError = ErrorType<void>
+
+    /**
+ * @summary Push an approved commit without force
+ */
+export const usePushChangeProposal = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pushChangeProposal>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof pushChangeProposal>>,
+        TError,
+        {data: BodyType<ProposalActionInput>},
+        TContext
+      > => {
+      return useMutation(getPushChangeProposalMutationOptions(options));
     }
 
 export const getConnectRepositoryUrl = () => {
