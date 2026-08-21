@@ -6,7 +6,7 @@ import {
 } from "@workspace/api-zod";
 import { providerManager } from "../ai/provider-manager";
 import { GroqProviderError } from "../ai/groq-provider";
-import { retrieveRepositoryContext, type RepositoryRef } from "../repository/github-provider";
+import { retrieveRepositoryContext, type RepositoryContextResult, type RepositoryRef } from "../repository/github-provider";
 
 const router: IRouter = Router();
 
@@ -24,8 +24,9 @@ router.post("/ai/chat", async (req, res) => {
 
   try {
     const provider = providerManager.getProvider();
-    const result = await provider.chat(await withRepositoryContext(parsed.data));
-    res.json(SendAiMessageResponse.parse(result));
+    const prepared = await withRepositoryContext(parsed.data);
+    const result = await provider.chat(prepared);
+    res.json(SendAiMessageResponse.parse({ ...result, repositoryContext: prepared.repositoryContextUsed }));
   } catch (error) {
     sendProviderError(res, error);
   }
@@ -46,10 +47,11 @@ router.post("/ai/chat/stream", async (req, res) => {
 
   try {
     const provider = providerManager.getProvider();
-    const result = await provider.stream(await withRepositoryContext(parsed.data), (token) => {
+    const prepared = await withRepositoryContext(parsed.data);
+    const result = await provider.stream(prepared, (token) => {
       res.write(`data: ${JSON.stringify({ token })}\n\n`);
     });
-    res.write(`data: ${JSON.stringify({ done: true, response: result })}\n\n`);
+    res.write(`data: ${JSON.stringify({ done: true, response: { ...result, repositoryContext: prepared.repositoryContextUsed } })}\n\n`);
     res.write("data: [DONE]\n\n");
   } catch (error) {
     res.write(
@@ -74,12 +76,30 @@ function sendProviderError(
   res.status(status).json({ error: publicProviderError(error) });
 }
 
-async function withRepositoryContext<T extends { messages: Array<{ role: "user" | "assistant" | "system"; content: string }>; repositoryContext?: { repository: RepositoryRef; paths: string[] } }>(request: T): Promise<T> {
+type PreparedAiRequest = {
+  model: string;
+  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+  temperature?: number | null;
+  repositoryContext?: { repository: RepositoryRef; paths: string[] };
+  repositoryContextUsed?: { paths: string[]; sources: Array<{ path: string; startLine?: number; endLine?: number }> };
+};
+
+async function withRepositoryContext(request: PreparedAiRequest): Promise<PreparedAiRequest> {
   if (!request.repositoryContext) return request;
   const question = [...request.messages].reverse().find((message) => message.role === "user")?.content ?? "";
-  const context = await retrieveRepositoryContext(request.repositoryContext.repository, request.repositoryContext.paths, question).catch(() => "");
-  if (!context) return request;
-  return { ...request, messages: [...request.messages, { role: "system", content: `Repository: ${request.repositoryContext.repository.owner}/${request.repositoryContext.repository.name}\nBranch: ${request.repositoryContext.repository.branch}\nRelevant read-only source context:\n${context}` }] };
+  const context = await retrieveRepositoryContext(request.repositoryContext.repository, request.repositoryContext.paths, question).catch((): RepositoryContextResult => ({
+    text: [
+      "Repository evidence is currently unavailable because the read-only source service could not retrieve the repository.",
+      "Do not infer or invent framework, package manager, entry point, authentication, database, or architecture details.",
+      "Tell the user that repository evidence is unavailable and ask them to retry later.",
+    ].join("\n"),
+    sources: [],
+  }));
+  return {
+    ...request,
+    repositoryContextUsed: { paths: context.sources.map((source) => source.path), sources: context.sources },
+    messages: [...request.messages, { role: "system", content: `Repository: ${request.repositoryContext.repository.owner}/${request.repositoryContext.repository.name}\nBranch: ${request.repositoryContext.repository.branch}\nRelevant read-only source context:\n${context.text}` }],
+  };
 }
 
 function publicProviderError(error: unknown): string {

@@ -68,7 +68,15 @@ export const SendAiMessageResponse = zod.object({
   "id": zod.string(),
   "model": zod.string(),
   "content": zod.string(),
-  "provider": zod.string()
+  "provider": zod.string(),
+  "repositoryContext": zod.object({
+  "paths": zod.array(zod.string()),
+  "sources": zod.array(zod.object({
+  "path": zod.string(),
+  "startLine": zod.number().optional(),
+  "endLine": zod.number().optional()
+}))
+}).optional()
 })
 
 
@@ -194,5 +202,58 @@ export const SearchRepositoryResponseItem = zod.object({
   "context": zod.string()
 })
 export const SearchRepositoryResponse = zod.array(SearchRepositoryResponseItem)
+
+
+/**
+ * @summary Get a cached read-only repository intelligence overview
+ */
+export const GetRepositoryOverviewBody = zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "path": zod.string().optional()
+})
+
+export const GetRepositoryOverviewResponse = zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "fileCount": zod.number(),
+  "sourceCount": zod.number(),
+  "configCount": zod.number(),
+  "testCount": zod.number(),
+  "framework": zod.string(),
+  "language": zod.string(),
+  "packageManager": zod.string(),
+  "directories": zod.array(zod.string()),
+  "entryPoints": zod.array(zod.string()),
+  "authenticationFiles": zod.array(zod.string()),
+  "apiFiles": zod.array(zod.string()),
+  "databaseFiles": zod.array(zod.string()),
+  "files": zod.array(zod.object({
+  "path": zod.string(),
+  "category": zod.string(),
+  "language": zod.string(),
+  "size": zod.number().optional()
+})),
+  "dependencies": zod.array(zod.object({
+  "from": zod.string(),
+  "to": zod.string()
+})),
+  "architecture": zod.array(zod.object({
+  "layer": zod.string(),
+  "paths": zod.array(zod.string())
+}))
+})
 
 

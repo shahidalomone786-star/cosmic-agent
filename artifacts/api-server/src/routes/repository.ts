@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { connectRepository, listTree, readRepositoryFile, searchRepository, RepositoryError, type RepositoryRef } from "../repository/github-provider";
+import { connectRepository, getRepositoryOverview, listTree, readRepositoryFile, searchRepository, RepositoryError, type RepositoryRef } from "../repository/github-provider";
 
 const router: IRouter = Router();
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === "object");
@@ -34,5 +34,10 @@ router.post("/repository/search", async (req, res) => {
   const query = isRecord(req.body) && typeof req.body.query === "string" ? req.body.query : "";
   if (!isRepositoryRef(repository) || !query) { res.status(400).json({ error: "Enter a search term." }); return; }
   try { res.json(await searchRepository(repository, query)); } catch (error) { sendError(res, error); }
+});
+router.post("/repository/overview", async (req, res) => {
+  const repository = isRecord(req.body) ? req.body.repository : undefined;
+  if (!isRepositoryRef(repository)) { res.status(400).json({ error: "Invalid repository reference.", code: "not_connected" }); return; }
+  try { res.json(await getRepositoryOverview(repository)); } catch (error) { sendError(res, error); }
 });
 export default router;

@@ -62,11 +62,23 @@ export interface AiChatInput {
   repositoryContext?: AiChatInputRepositoryContext;
 }
 
+export type RepositoryContextUsedSourcesItem = {
+  path: string;
+  startLine?: number;
+  endLine?: number;
+};
+
+export interface RepositoryContextUsed {
+  paths: string[];
+  sources: RepositoryContextUsedSourcesItem[];
+}
+
 export interface AiChatResponse {
   id: string;
   model: string;
   content: string;
   provider: string;
+  repositoryContext?: RepositoryContextUsed;
 }
 
 export interface RepositoryConnectInput {
@@ -117,5 +129,41 @@ export interface RepositorySearchResult {
   path: string;
   line: number;
   context: string;
+}
+
+export type RepositoryOverviewFilesItem = {
+  path: string;
+  category: string;
+  language: string;
+  size?: number;
+};
+
+export type RepositoryOverviewDependenciesItem = {
+  from: string;
+  to: string;
+};
+
+export type RepositoryOverviewArchitectureItem = {
+  layer: string;
+  paths: string[];
+};
+
+export interface RepositoryOverview {
+  repository: RepositoryRef;
+  fileCount: number;
+  sourceCount: number;
+  configCount: number;
+  testCount: number;
+  framework: string;
+  language: string;
+  packageManager: string;
+  directories: string[];
+  entryPoints: string[];
+  authenticationFiles: string[];
+  apiFiles: string[];
+  databaseFiles: string[];
+  files: RepositoryOverviewFilesItem[];
+  dependencies: RepositoryOverviewDependenciesItem[];
+  architecture: RepositoryOverviewArchitectureItem[];
 }
 

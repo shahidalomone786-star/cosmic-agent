@@ -171,6 +171,24 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/RepositorySearchResult"
+  /repository/overview:
+    post:
+      operationId: getRepositoryOverview
+      tags: [repository]
+      summary: Get a cached read-only repository intelligence overview
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryTreeInput"
+      responses:
+        "200":
+          description: Repository structure, classifications, and dependency relationships
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryOverview"
 components:
   schemas:
     HealthStatus:
@@ -256,11 +274,29 @@ components:
           type: string
         provider:
           type: string
+        repositoryContext:
+          $ref: "#/components/schemas/RepositoryContextUsed"
       required:
         - id
         - model
         - content
         - provider
+    RepositoryContextUsed:
+      type: object
+      properties:
+        paths:
+          type: array
+          items: { type: string }
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              startLine: { type: number }
+              endLine: { type: number }
+            required: [path]
+      required: [paths, sources]
     RepositoryConnectInput:
       type: object
       properties:
@@ -322,4 +358,76 @@ components:
         line: { type: number }
         context: { type: string }
       required: [path, line, context]
+    RepositoryOverview:
+      type: object
+      properties:
+        repository:
+          $ref: "#/components/schemas/RepositoryRef"
+        fileCount: { type: number }
+        sourceCount: { type: number }
+        configCount: { type: number }
+        testCount: { type: number }
+        framework: { type: string }
+        language: { type: string }
+        packageManager: { type: string }
+        directories:
+          type: array
+          items: { type: string }
+        entryPoints:
+          type: array
+          items: { type: string }
+        authenticationFiles:
+          type: array
+          items: { type: string }
+        apiFiles:
+          type: array
+          items: { type: string }
+        databaseFiles:
+          type: array
+          items: { type: string }
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              category: { type: string }
+              language: { type: string }
+              size: { type: number }
+            required: [path, category, language]
+        dependencies:
+          type: array
+          items:
+            type: object
+            properties:
+              from: { type: string }
+              to: { type: string }
+            required: [from, to]
+        architecture:
+          type: array
+          items:
+            type: object
+            properties:
+              layer: { type: string }
+              paths:
+                type: array
+                items: { type: string }
+            required: [layer, paths]
+      required:
+        - repository
+        - fileCount
+        - sourceCount
+        - configCount
+        - testCount
+        - framework
+        - language
+        - packageManager
+        - directories
+        - entryPoints
+        - authenticationFiles
+        - apiFiles
+        - databaseFiles
+        - files
+        - dependencies
+        - architecture
 

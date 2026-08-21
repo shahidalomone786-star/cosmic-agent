@@ -28,6 +28,7 @@ import type {
   RepositoryEntry,
   RepositoryFile,
   RepositoryFileInput,
+  RepositoryOverview,
   RepositoryRef,
   RepositorySearchInput,
   RepositorySearchResult,
@@ -643,5 +644,76 @@ export const useSearchRepository = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getSearchRepositoryMutationOptions(options));
+    }
+
+export const getGetRepositoryOverviewUrl = () => {
+
+
+
+
+  return `/api/repository/overview`
+}
+
+/**
+ * @summary Get a cached read-only repository intelligence overview
+ */
+export const getRepositoryOverview = async (repositoryTreeInput: RepositoryTreeInput, options?: Parameters<typeof customFetch>[1]): Promise<RepositoryOverview> => {
+
+  return customFetch<RepositoryOverview>(getGetRepositoryOverviewUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(repositoryTreeInput)
+  }
+);}
+
+
+
+
+
+export const getGetRepositoryOverviewMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getRepositoryOverview>>, TError,{data: BodyType<RepositoryTreeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof getRepositoryOverview>>, TError,{data: BodyType<RepositoryTreeInput>}, TContext> => {
+
+const mutationKey = ['getRepositoryOverview'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof getRepositoryOverview>>, {data: BodyType<RepositoryTreeInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  getRepositoryOverview(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GetRepositoryOverviewMutationResult = NonNullable<Awaited<ReturnType<typeof getRepositoryOverview>>>
+    export type GetRepositoryOverviewMutationBody = BodyType<RepositoryTreeInput>
+    export type GetRepositoryOverviewMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Get a cached read-only repository intelligence overview
+ */
+export const useGetRepositoryOverview = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getRepositoryOverview>>, TError,{data: BodyType<RepositoryTreeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof getRepositoryOverview>>,
+        TError,
+        {data: BodyType<RepositoryTreeInput>},
+        TContext
+      > => {
+      return useMutation(getGetRepositoryOverviewMutationOptions(options));
     }
 

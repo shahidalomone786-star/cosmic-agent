@@ -25,11 +25,50 @@ export type FileResult = {
   truncated: boolean;
 };
 
+export type RepositoryFileCategory =
+  | "react-component"
+  | "typescript-javascript"
+  | "api-server"
+  | "authentication"
+  | "database"
+  | "configuration"
+  | "styling"
+  | "test"
+  | "documentation"
+  | "package"
+  | "other";
+
+export type RepositoryOverview = {
+  repository: RepositoryRef;
+  fileCount: number;
+  sourceCount: number;
+  configCount: number;
+  testCount: number;
+  framework: string;
+  language: string;
+  packageManager: string;
+  directories: string[];
+  entryPoints: string[];
+  authenticationFiles: string[];
+  apiFiles: string[];
+  databaseFiles: string[];
+  files: Array<{ path: string; category: RepositoryFileCategory; language: string; size?: number }>;
+  dependencies: Array<{ from: string; to: string }>;
+  architecture: Array<{ layer: string; paths: string[] }>;
+};
+
+type GitHubTreeEntry = { path: string; type: string; size?: number };
+type IndexedFile = { path: string; category: RepositoryFileCategory; language: string; size?: number };
+
 const GITHUB_API = "https://api.github.com";
 const MAX_FILE_BYTES = 240_000;
 const BLOCKED = /(^|\/)(node_modules|dist|build|\.git|\.cache|coverage)(\/|$)/i;
 const SECRET_FILE = /(^|\/)(\.env(\..*)?|.*\.(pem|key|p12|pfx|crt))$/i;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? process.env.GITHUB_API_TOKEN;
+const INDEX_TTL_MS = 10 * 60 * 1000;
+const REPOSITORY_CACHE = new Map<string, { expiresAt: number; tree: GitHubTreeEntry[]; overview?: RepositoryOverview }>();
+const FILE_CACHE = new Map<string, { expiresAt: number; file: FileResult }>();
+const BRANCH_SHA_CACHE = new Map<string, { expiresAt: number; sha: string }>();
 
 export class RepositoryError extends Error {
   constructor(
@@ -128,21 +167,24 @@ export async function listTree(repository: RepositoryRef, path = ""): Promise<Tr
 
 export async function readRepositoryFile(repository: RepositoryRef, path: string): Promise<FileResult> {
   if (BLOCKED.test(path) || SECRET_FILE.test(path)) throw new RepositoryError("permission_denied", "This file is protected from repository context.");
+  const cacheKey = repositoryCacheKey(repository, path);
+  const cached = FILE_CACHE.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.file;
   await resolveBranchSha(repository.owner, repository.name, repository.branch);
   const data = await githubFetch<{ content?: string; encoding?: string; size?: number; type?: string }>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(repository.branch)}`, "File not found on the selected branch.");
   if (data.type !== "file") throw new RepositoryError("file_not_found", "File not found on the selected branch.");
   if ((data.size ?? 0) > MAX_FILE_BYTES) throw new RepositoryError("too_large", "This file is larger than the safe context limit. Search for a symbol instead.");
   if (!data.content || data.encoding !== "base64") throw new RepositoryError("unsupported_binary", "This file is not a supported text file.");
   const decoded = Buffer.from(data.content.replace(/\n/g, ""), "base64").toString("utf8");
-  return { path, language: languageFor(path), size: data.size ?? decoded.length, content: redactSecrets(decoded).slice(0, MAX_FILE_BYTES), truncated: decoded.length > MAX_FILE_BYTES };
+  const file = { path, language: languageFor(path), size: data.size ?? decoded.length, content: redactSecrets(decoded).slice(0, MAX_FILE_BYTES), truncated: decoded.length > MAX_FILE_BYTES };
+  FILE_CACHE.set(cacheKey, { expiresAt: Date.now() + INDEX_TTL_MS, file });
+  return file;
 }
 
 export async function searchRepository(repository: RepositoryRef, query: string): Promise<Array<{ path: string; line: number; context: string }>> {
   const safeQuery = query.trim();
   if (!safeQuery) return [];
-  const branchSha = await resolveBranchSha(repository.owner, repository.name, repository.branch);
-  const treeResponse = await githubFetch<{ tree?: Array<{ path: string; type: string }>; truncated?: boolean }>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/git/trees/${encodeURIComponent(branchSha)}?recursive=1`, "Repository tree not found on the selected branch.");
-  const candidates = (treeResponse.tree ?? []).filter((entry) => entry.type === "blob" && !BLOCKED.test(entry.path) && !SECRET_FILE.test(entry.path)).slice(0, 500);
+  const candidates = (await getRepositoryTree(repository)).filter((entry) => entry.type === "blob" && !BLOCKED.test(entry.path) && !SECRET_FILE.test(entry.path)).slice(0, 500);
   const results: Array<{ path: string; line: number; context: string }> = [];
   for (const entry of candidates) {
     if (results.length >= 40) break;
@@ -156,7 +198,99 @@ export async function searchRepository(repository: RepositoryRef, query: string)
   return results;
 }
 
+export async function getRepositoryOverview(repository: RepositoryRef): Promise<RepositoryOverview> {
+  const cacheKey = repositoryCacheKey(repository);
+  const cached = REPOSITORY_CACHE.get(cacheKey);
+  if (cached?.overview && cached.expiresAt > Date.now()) return cached.overview;
+
+  const tree = await getRepositoryTree(repository);
+  const files = tree
+    .filter((entry) => entry.type === "blob" && !BLOCKED.test(entry.path) && !SECRET_FILE.test(entry.path))
+    .map((entry) => ({ path: entry.path, category: classifyFile(entry.path), language: languageFor(entry.path), size: entry.size }));
+  const contentCandidates = files
+    .filter((file) => isUsefulForIndex(file))
+    .slice(0, 90);
+  const contents = new Map<string, string>();
+  await Promise.all(contentCandidates.map(async (file) => {
+    try {
+      const result = await readRepositoryFile(repository, file.path);
+      contents.set(file.path, result.content);
+    } catch {
+      // Classification remains path-based when GitHub cannot provide a file.
+    }
+  }));
+  const classifiedFiles = files.map((file) => ({
+    ...file,
+    category: classifyFile(file.path, contents.get(file.path)),
+  }));
+  const dependencies = buildDependencyGraph(classifiedFiles, contents);
+  const overview: RepositoryOverview = {
+    repository,
+    fileCount: classifiedFiles.length,
+    sourceCount: classifiedFiles.filter((file) => ["react-component", "typescript-javascript", "api-server"].includes(file.category)).length,
+    configCount: classifiedFiles.filter((file) => file.category === "configuration" || file.category === "package").length,
+    testCount: classifiedFiles.filter((file) => file.category === "test").length,
+    framework: detectFramework(contents, classifiedFiles),
+    language: detectLanguage(classifiedFiles),
+    packageManager: detectPackageManager(classifiedFiles),
+    directories: majorDirectories(classifiedFiles),
+    entryPoints: detectEntryPoints(classifiedFiles),
+    authenticationFiles: classifiedFiles.filter((file) => file.category === "authentication").map((file) => file.path).slice(0, 12),
+    apiFiles: classifiedFiles.filter((file) => file.category === "api-server").map((file) => file.path).slice(0, 12),
+    databaseFiles: classifiedFiles.filter((file) => file.category === "database").map((file) => file.path).slice(0, 12),
+    files: classifiedFiles,
+    dependencies,
+    architecture: buildArchitecture(classifiedFiles),
+  };
+  REPOSITORY_CACHE.set(cacheKey, { expiresAt: Date.now() + INDEX_TTL_MS, tree, overview });
+  return overview;
+}
+
+type ContextSource = { path: string; startLine?: number; endLine?: number };
+export type RepositoryContextResult = { text: string; sources: ContextSource[] };
+
+export async function retrieveRepositoryContext(repository: RepositoryRef, paths: string[], question: string): Promise<RepositoryContextResult> {
+  const overview = await getRepositoryOverview(repository);
+  const explicit = resolveExplicitPaths(paths, overview.files);
+  const ranked = rankFiles(question, overview.files).filter((file) => !explicit.includes(file.path));
+  const selected = [...explicit.map((path) => overview.files.find((file) => file.path === path)).filter((file): file is IndexedFile => Boolean(file)), ...ranked].slice(0, 8);
+  const snippets: string[] = [
+    [
+      "Repository intelligence summary (ground truth from the indexed tree):",
+      `- Repository: ${overview.repository.owner}/${overview.repository.name}`,
+      `- Branch: ${overview.repository.branch}`,
+      `- Framework: ${overview.framework}`,
+      `- Primary language: ${overview.language}`,
+      `- Package manager: ${overview.packageManager}`,
+      `- Indexed files: ${overview.fileCount} total, ${overview.sourceCount} source, ${overview.configCount} configuration/package, ${overview.testCount} tests`,
+      `- Architecture layers: ${overview.architecture.map((layer) => `${layer.layer} (${layer.paths.slice(0, 4).join(", ")})`).join("; ") || "none detected"}`,
+      "",
+      "Grounding rules: Use only this summary and the source excerpts below. Do not guess frameworks, authentication, routes, or data stores that are not evidenced here. If the excerpts do not establish a detail, say that it is not established. Cite exact file paths in backticks.",
+    ].join("\n"),
+  ];
+  const sources: ContextSource[] = [];
+  let totalChars = 0;
+  for (const file of selected) {
+    if (totalChars >= 72_000) break;
+    try {
+      const result = await readRepositoryFile(repository, file.path);
+      const content = result.content.slice(0, Math.min(18_000, 72_000 - totalChars));
+      const lines = content.split("\n");
+      const range = relevantLineRange(lines, question);
+      snippets.push(`### ${result.path}${range ? ` (lines ${range.startLine}-${range.endLine})` : ""}\n${content}`);
+      sources.push({ path: result.path, ...range });
+      totalChars += content.length;
+    } catch {
+      // Skip files that become unavailable or unsafe between indexing and retrieval.
+    }
+  }
+  return { text: snippets.join("\n\n"), sources };
+}
+
 async function resolveBranchSha(owner: string, name: string, branch: string): Promise<string> {
+  const cacheKey = `${owner}/${name}#${branch}`;
+  const cached = BRANCH_SHA_CACHE.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.sha;
   const encodedBranch = branch.split("/").map(encodeURIComponent).join("/");
   const ref = await githubFetch<{ object?: { sha?: string; type?: string } }>(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${encodedBranch}`,
@@ -168,18 +302,151 @@ async function resolveBranchSha(owner: string, name: string, branch: string): Pr
     throw error;
   });
   if (!ref.object?.sha) throw new RepositoryError("branch_not_found", "Branch not found on the repository.");
+  BRANCH_SHA_CACHE.set(cacheKey, { expiresAt: Date.now() + INDEX_TTL_MS, sha: ref.object.sha });
   return ref.object.sha;
 }
 
-export async function retrieveRepositoryContext(repository: RepositoryRef, paths: string[], question: string): Promise<string> {
-  const explicit = paths.filter((path) => path && !BLOCKED.test(path) && !SECRET_FILE.test(path)).slice(0, 5);
-  const searchResults = await searchRepository(repository, question).catch(() => []);
-  const searchPaths = searchResults.map((result) => result.path).filter((path) => !explicit.includes(path)).slice(0, 3);
-  const selected = [...explicit, ...searchPaths].slice(0, 8);
-  const snippets = await Promise.all(selected.map(async (path) => {
-    try { const file = await readRepositoryFile(repository, path); return `### ${file.path}\n${file.content.slice(0, 24_000)}`; } catch { return ""; }
-  }));
-  return snippets.filter(Boolean).join("\n\n");
+async function getRepositoryTree(repository: RepositoryRef): Promise<GitHubTreeEntry[]> {
+  const cacheKey = repositoryCacheKey(repository);
+  const cached = REPOSITORY_CACHE.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.tree;
+  const branchSha = await resolveBranchSha(repository.owner, repository.name, repository.branch);
+  const treeResponse = await githubFetch<{ tree?: GitHubTreeEntry[]; truncated?: boolean }>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/git/trees/${encodeURIComponent(branchSha)}?recursive=1`, "Repository tree not found on the selected branch.");
+  const tree = treeResponse.tree ?? [];
+  REPOSITORY_CACHE.set(cacheKey, { expiresAt: Date.now() + INDEX_TTL_MS, tree });
+  return tree;
+}
+
+function repositoryCacheKey(repository: RepositoryRef, path = ""): string {
+  return `${repository.owner}/${repository.name}#${repository.branch}${path ? `/${path}` : ""}`;
+}
+
+function classifyFile(path: string, content = ""): RepositoryFileCategory {
+  const lower = path.toLowerCase();
+  const text = content.toLowerCase();
+  if (/(^|\/)(package\.json|pnpm-lock\.yaml|yarn\.lock|package-lock\.json|bun\.lockb)$/.test(lower)) return "package";
+  if (/(test|spec|__tests__|\.test\.|\.spec\.)/.test(lower)) return "test";
+  if (/(readme|docs?\/|changelog|\.md$)/.test(lower)) return "documentation";
+  if (/(^|\/)(\.env|.*\.(pem|key|p12|pfx|crt))/.test(lower)) return "configuration";
+  if (/(vite|webpack|tsconfig|eslint|prettier|babel|config|\.replit|dockerfile)/.test(lower)) return "configuration";
+  if (/(auth|login|session|identity|clerk|supabase)/.test(lower) || /(supabase\.auth|clerk|signIn|signOut|authcontext)/.test(text)) return "authentication";
+  if (/(database|schema|migration|drizzle|prisma|sequelize|typeorm|supabase)/.test(lower) || /(drizzle|prisma|create table|database_url)/.test(text)) return "database";
+  if (/(route|router|api|server|endpoint|controller|middleware)/.test(lower) || /(express\(|router\.(get|post|put|delete)|fetch\(|\/api\/)/.test(text)) return "api-server";
+  if (/\.(css|scss|sass|less|styl)$/.test(lower)) return "styling";
+  if (/\.(tsx|jsx)$/.test(lower)) return "react-component";
+  if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(lower)) return "typescript-javascript";
+  return "other";
+}
+
+function isUsefulForIndex(file: IndexedFile): boolean {
+  return file.category !== "other" && file.category !== "documentation" && !file.path.toLowerCase().endsWith(".lock");
+}
+
+function detectFramework(contents: Map<string, string>, files: IndexedFile[]): string {
+  const text = [...contents.values()].join("\n").toLowerCase();
+  const paths = files.map((file) => file.path.toLowerCase()).join("\n");
+  if (text.includes("\"next\"") || paths.includes("next.config")) return "Next.js";
+  if (text.includes("\"vite\"") || paths.includes("vite.config")) return "React + Vite";
+  if (text.includes("\"express\"")) return "Express";
+  if (text.includes("\"expo\"")) return "Expo";
+  if (text.includes("\"react\"")) return "React";
+  return "Undetected";
+}
+
+function detectPackageManager(files: IndexedFile[]): string {
+  const paths = new Set(files.map((file) => file.path.toLowerCase()));
+  if (paths.has("pnpm-lock.yaml")) return "pnpm";
+  if (paths.has("yarn.lock")) return "Yarn";
+  if (paths.has("package-lock.json")) return "npm";
+  if (paths.has("bun.lockb") || paths.has("bun.lock")) return "Bun";
+  return "Undetected";
+}
+
+function detectLanguage(files: IndexedFile[]): string {
+  const counts = new Map<string, number>();
+  for (const file of files) if (file.language !== "text" && file.language !== "markdown" && file.language !== "json") counts.set(file.language, (counts.get(file.language) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Undetected";
+}
+
+function majorDirectories(files: IndexedFile[]): string[] {
+  return [...new Set(files.map((file) => file.path.split("/")[0]).filter((path) => path && path !== "."))].slice(0, 20);
+}
+
+function detectEntryPoints(files: IndexedFile[]): string[] {
+  const preferred = files.filter((file) => /(^|\/)(app|main|index|server)\.(tsx?|jsx?|mjs|cjs)$|(^|\/)src\/App\.tsx$/i.test(file.path));
+  return preferred.map((file) => file.path).slice(0, 12);
+}
+
+function resolveExplicitPaths(paths: string[], files: IndexedFile[]): string[] {
+  const result: string[] = [];
+  for (const requested of paths.slice(0, 8)) {
+    const clean = requested.replace(/^@/, "").trim();
+    const exact = files.find((file) => file.path === clean);
+    const basename = files.find((file) => file.path.split("/").pop()?.toLowerCase() === clean.toLowerCase());
+    const match = exact ?? basename;
+    if (match && !result.includes(match.path)) result.push(match.path);
+  }
+  return result.slice(0, 5);
+}
+
+function rankFiles(question: string, files: IndexedFile[]): IndexedFile[] {
+  const terms = question.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length > 2);
+  return files.map((file) => {
+    const path = file.path.toLowerCase();
+    let score = 0;
+    for (const term of terms) if (path.includes(term)) score += 5;
+    if (terms.some((term) => ["auth", "login", "session"].includes(term)) && file.category === "authentication") score += 8;
+    if (terms.some((term) => ["api", "route", "search", "endpoint"].includes(term)) && file.category === "api-server") score += 7;
+    if (terms.some((term) => ["database", "data", "schema"].includes(term)) && file.category === "database") score += 7;
+    if (file.category === "react-component" && terms.some((term) => ["homepage", "home", "component", "app", "architecture"].includes(term))) score += 3;
+    if (file.path.toLowerCase().includes("app.")) score += 2;
+    return { file, score };
+  }).sort((a, b) => b.score - a.score || a.file.path.localeCompare(b.file.path)).filter((item) => item.score > 0).map((item) => item.file).slice(0, 12);
+}
+
+function buildDependencyGraph(files: IndexedFile[], contents: Map<string, string>): Array<{ from: string; to: string }> {
+  const known = new Set(files.map((file) => file.path));
+  const edges: Array<{ from: string; to: string }> = [];
+  for (const file of files.filter((item) => contents.has(item.path)).slice(0, 120)) {
+    const source = contents.get(file.path) ?? "";
+    const imports = source.matchAll(/(?:from\s+|import\s*\(\s*|require\s*\(\s*)["']([^"']+)["']/g);
+    for (const match of imports) {
+      const target = resolveRelativePath(file.path, match[1], known);
+      if (target && target !== file.path && !edges.some((edge) => edge.from === file.path && edge.to === target)) edges.push({ from: file.path, to: target });
+      if (edges.length >= 800) return edges;
+    }
+  }
+  return edges;
+}
+
+function resolveRelativePath(from: string, imported: string, known: Set<string>): string | undefined {
+  if (!imported.startsWith(".")) return undefined;
+  const base = from.split("/");
+  base.pop();
+  const parts = [...base, ...imported.split("/")].filter(Boolean);
+  const normalized: string[] = [];
+  for (const part of parts) part === ".." ? normalized.pop() : part !== "." && normalized.push(part);
+  const stem = normalized.join("/");
+  return [stem, `${stem}.ts`, `${stem}.tsx`, `${stem}.js`, `${stem}.jsx`, `${stem}.mjs`, `${stem}/index.ts`, `${stem}/index.tsx`, `${stem}/index.js`].find((candidate) => known.has(candidate));
+}
+
+function buildArchitecture(files: IndexedFile[]): Array<{ layer: string; paths: string[] }> {
+  const groups: Array<[string, RepositoryFileCategory[]]> = [
+    ["Frontend", ["react-component", "typescript-javascript", "styling"]],
+    ["Routes / API", ["api-server"]],
+    ["Authentication", ["authentication"]],
+    ["Database / Data", ["database"]],
+    ["Configuration", ["configuration", "package"]],
+    ["Tests / Docs", ["test", "documentation"]],
+  ];
+  return groups.map(([layer, categories]) => ({ layer, paths: files.filter((file) => categories.includes(file.category)).map((file) => file.path).slice(0, 8) })).filter((group) => group.paths.length > 0);
+}
+
+function relevantLineRange(lines: string[], question: string): { startLine: number; endLine: number } | undefined {
+  const terms = question.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length > 3);
+  const index = lines.findIndex((line) => terms.some((term) => line.toLowerCase().includes(term)));
+  if (index < 0) return undefined;
+  return { startLine: index + 1, endLine: Math.min(lines.length, index + 18) };
 }
 
 function redactSecrets(content: string): string {
