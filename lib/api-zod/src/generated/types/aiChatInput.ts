@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AiChatInputRepositoryContext } from './aiChatInputRepositoryContext';
 import type { AiChatMessage } from './aiChatMessage';
 
 export interface AiChatInput {
@@ -18,4 +19,5 @@ export interface AiChatInput {
      * @nullable
      */
   temperature?: number | null;
+  repositoryContext?: AiChatInputRepositoryContext;
 }

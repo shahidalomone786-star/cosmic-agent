@@ -23,7 +23,15 @@ import type {
   AiChatInput,
   AiChatResponse,
   AiModel,
-  HealthStatus
+  HealthStatus,
+  RepositoryConnectInput,
+  RepositoryEntry,
+  RepositoryFile,
+  RepositoryFileInput,
+  RepositoryRef,
+  RepositorySearchInput,
+  RepositorySearchResult,
+  RepositoryTreeInput
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -351,5 +359,289 @@ export const useStreamAiMessage = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getStreamAiMessageMutationOptions(options));
+    }
+
+export const getConnectRepositoryUrl = () => {
+
+
+
+
+  return `/api/repository/connect`
+}
+
+/**
+ * @summary Connect a read-only GitHub repository
+ */
+export const connectRepository = async (repositoryConnectInput: RepositoryConnectInput, options?: Parameters<typeof customFetch>[1]): Promise<RepositoryRef> => {
+
+  return customFetch<RepositoryRef>(getConnectRepositoryUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(repositoryConnectInput)
+  }
+);}
+
+
+
+
+
+export const getConnectRepositoryMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof connectRepository>>, TError,{data: BodyType<RepositoryConnectInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof connectRepository>>, TError,{data: BodyType<RepositoryConnectInput>}, TContext> => {
+
+const mutationKey = ['connectRepository'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof connectRepository>>, {data: BodyType<RepositoryConnectInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  connectRepository(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ConnectRepositoryMutationResult = NonNullable<Awaited<ReturnType<typeof connectRepository>>>
+    export type ConnectRepositoryMutationBody = BodyType<RepositoryConnectInput>
+    export type ConnectRepositoryMutationError = ErrorType<void>
+
+    /**
+ * @summary Connect a read-only GitHub repository
+ */
+export const useConnectRepository = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof connectRepository>>, TError,{data: BodyType<RepositoryConnectInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof connectRepository>>,
+        TError,
+        {data: BodyType<RepositoryConnectInput>},
+        TContext
+      > => {
+      return useMutation(getConnectRepositoryMutationOptions(options));
+    }
+
+export const getListRepositoryTreeUrl = () => {
+
+
+
+
+  return `/api/repository/tree`
+}
+
+/**
+ * @summary List one directory from a connected repository
+ */
+export const listRepositoryTree = async (repositoryTreeInput: RepositoryTreeInput, options?: Parameters<typeof customFetch>[1]): Promise<RepositoryEntry[]> => {
+
+  return customFetch<RepositoryEntry[]>(getListRepositoryTreeUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(repositoryTreeInput)
+  }
+);}
+
+
+
+
+
+export const getListRepositoryTreeMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof listRepositoryTree>>, TError,{data: BodyType<RepositoryTreeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof listRepositoryTree>>, TError,{data: BodyType<RepositoryTreeInput>}, TContext> => {
+
+const mutationKey = ['listRepositoryTree'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof listRepositoryTree>>, {data: BodyType<RepositoryTreeInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  listRepositoryTree(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ListRepositoryTreeMutationResult = NonNullable<Awaited<ReturnType<typeof listRepositoryTree>>>
+    export type ListRepositoryTreeMutationBody = BodyType<RepositoryTreeInput>
+    export type ListRepositoryTreeMutationError = ErrorType<unknown>
+
+    /**
+ * @summary List one directory from a connected repository
+ */
+export const useListRepositoryTree = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof listRepositoryTree>>, TError,{data: BodyType<RepositoryTreeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof listRepositoryTree>>,
+        TError,
+        {data: BodyType<RepositoryTreeInput>},
+        TContext
+      > => {
+      return useMutation(getListRepositoryTreeMutationOptions(options));
+    }
+
+export const getReadRepositoryFileUrl = () => {
+
+
+
+
+  return `/api/repository/file`
+}
+
+/**
+ * @summary Read a protected text file from a repository
+ */
+export const readRepositoryFile = async (repositoryFileInput: RepositoryFileInput, options?: Parameters<typeof customFetch>[1]): Promise<RepositoryFile> => {
+
+  return customFetch<RepositoryFile>(getReadRepositoryFileUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(repositoryFileInput)
+  }
+);}
+
+
+
+
+
+export const getReadRepositoryFileMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof readRepositoryFile>>, TError,{data: BodyType<RepositoryFileInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof readRepositoryFile>>, TError,{data: BodyType<RepositoryFileInput>}, TContext> => {
+
+const mutationKey = ['readRepositoryFile'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof readRepositoryFile>>, {data: BodyType<RepositoryFileInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  readRepositoryFile(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReadRepositoryFileMutationResult = NonNullable<Awaited<ReturnType<typeof readRepositoryFile>>>
+    export type ReadRepositoryFileMutationBody = BodyType<RepositoryFileInput>
+    export type ReadRepositoryFileMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Read a protected text file from a repository
+ */
+export const useReadRepositoryFile = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof readRepositoryFile>>, TError,{data: BodyType<RepositoryFileInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof readRepositoryFile>>,
+        TError,
+        {data: BodyType<RepositoryFileInput>},
+        TContext
+      > => {
+      return useMutation(getReadRepositoryFileMutationOptions(options));
+    }
+
+export const getSearchRepositoryUrl = () => {
+
+
+
+
+  return `/api/repository/search`
+}
+
+/**
+ * @summary Search readable repository source
+ */
+export const searchRepository = async (repositorySearchInput: RepositorySearchInput, options?: Parameters<typeof customFetch>[1]): Promise<RepositorySearchResult[]> => {
+
+  return customFetch<RepositorySearchResult[]>(getSearchRepositoryUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(repositorySearchInput)
+  }
+);}
+
+
+
+
+
+export const getSearchRepositoryMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof searchRepository>>, TError,{data: BodyType<RepositorySearchInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof searchRepository>>, TError,{data: BodyType<RepositorySearchInput>}, TContext> => {
+
+const mutationKey = ['searchRepository'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof searchRepository>>, {data: BodyType<RepositorySearchInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  searchRepository(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SearchRepositoryMutationResult = NonNullable<Awaited<ReturnType<typeof searchRepository>>>
+    export type SearchRepositoryMutationBody = BodyType<RepositorySearchInput>
+    export type SearchRepositoryMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Search readable repository source
+ */
+export const useSearchRepository = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof searchRepository>>, TError,{data: BodyType<RepositorySearchInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof searchRepository>>,
+        TError,
+        {data: BodyType<RepositorySearchInput>},
+        TContext
+      > => {
+      return useMutation(getSearchRepositoryMutationOptions(options));
     }
 

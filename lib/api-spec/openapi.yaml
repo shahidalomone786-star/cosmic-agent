@@ -91,6 +91,86 @@ paths:
           description: Provider rate limit
         "503":
           description: Provider unavailable or not configured
+  /repository/connect:
+    post:
+      operationId: connectRepository
+      tags: [repository]
+      summary: Connect a read-only GitHub repository
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryConnectInput"
+      responses:
+        "200":
+          description: Repository metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryRef"
+        "400":
+          description: Invalid repository URL
+        "403":
+          description: Repository requires authorization
+  /repository/tree:
+    post:
+      operationId: listRepositoryTree
+      tags: [repository]
+      summary: List one directory from a connected repository
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryTreeInput"
+      responses:
+        "200":
+          description: Directory entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RepositoryEntry"
+  /repository/file:
+    post:
+      operationId: readRepositoryFile
+      tags: [repository]
+      summary: Read a protected text file from a repository
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryFileInput"
+      responses:
+        "200":
+          description: File content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryFile"
+  /repository/search:
+    post:
+      operationId: searchRepository
+      tags: [repository]
+      summary: Search readable repository source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositorySearchInput"
+      responses:
+        "200":
+          description: Search matches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RepositorySearchResult"
 components:
   schemas:
     HealthStatus:
@@ -153,6 +233,15 @@ components:
           type: [number, "null"]
           minimum: 0
           maximum: 2
+        repositoryContext:
+          type: object
+          properties:
+            repository:
+              $ref: "#/components/schemas/RepositoryRef"
+            paths:
+              type: array
+              items: { type: string }
+          required: [repository, paths]
       required:
         - model
         - messages
@@ -172,4 +261,65 @@ components:
         - model
         - content
         - provider
+    RepositoryConnectInput:
+      type: object
+      properties:
+        repositoryUrl:
+          type: string
+        branch:
+          type: string
+      required: [repositoryUrl]
+    RepositoryRef:
+      type: object
+      properties:
+        id: { type: string }
+        owner: { type: string }
+        name: { type: string }
+        branch: { type: string }
+        defaultBranch: { type: string }
+        webUrl: { type: string }
+      required: [id, owner, name, branch, defaultBranch, webUrl]
+    RepositoryEntry:
+      type: object
+      properties:
+        path: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [file, directory] }
+        size: { type: number }
+        language: { type: string }
+      required: [path, name, type]
+    RepositoryTreeInput:
+      type: object
+      properties:
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        path: { type: string }
+      required: [repository]
+    RepositoryFileInput:
+      type: object
+      properties:
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        path: { type: string }
+      required: [repository, path]
+    RepositoryFile:
+      type: object
+      properties:
+        path: { type: string }
+        language: { type: string }
+        size: { type: number }
+        content: { type: string }
+        truncated: { type: boolean }
+      required: [path, language, size, content, truncated]
+    RepositorySearchInput:
+      type: object
+      properties:
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        query: { type: string }
+      required: [repository, query]
+    RepositorySearchResult:
+      type: object
+      properties:
+        path: { type: string }
+        line: { type: number }
+        context: { type: string }
+      required: [path, line, context]
 

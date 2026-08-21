@@ -34,6 +34,20 @@ export interface AiChatMessage {
   content: string;
 }
 
+export interface RepositoryRef {
+  id: string;
+  owner: string;
+  name: string;
+  branch: string;
+  defaultBranch: string;
+  webUrl: string;
+}
+
+export type AiChatInputRepositoryContext = {
+  repository: RepositoryRef;
+  paths: string[];
+};
+
 export interface AiChatInput {
   /** @minLength 1 */
   model: string;
@@ -45,6 +59,7 @@ export interface AiChatInput {
      * @nullable
      */
   temperature?: number | null;
+  repositoryContext?: AiChatInputRepositoryContext;
 }
 
 export interface AiChatResponse {
@@ -52,5 +67,55 @@ export interface AiChatResponse {
   model: string;
   content: string;
   provider: string;
+}
+
+export interface RepositoryConnectInput {
+  repositoryUrl: string;
+  branch?: string;
+}
+
+export type RepositoryEntryType = typeof RepositoryEntryType[keyof typeof RepositoryEntryType];
+
+
+export const RepositoryEntryType = {
+  file: 'file',
+  directory: 'directory',
+} as const;
+
+export interface RepositoryEntry {
+  path: string;
+  name: string;
+  type: RepositoryEntryType;
+  size?: number;
+  language?: string;
+}
+
+export interface RepositoryTreeInput {
+  repository: RepositoryRef;
+  path?: string;
+}
+
+export interface RepositoryFileInput {
+  repository: RepositoryRef;
+  path: string;
+}
+
+export interface RepositoryFile {
+  path: string;
+  language: string;
+  size: number;
+  content: string;
+  truncated: boolean;
+}
+
+export interface RepositorySearchInput {
+  repository: RepositoryRef;
+  query: string;
+}
+
+export interface RepositorySearchResult {
+  path: string;
+  line: number;
+  context: string;
 }
 

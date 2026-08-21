@@ -7,8 +7,18 @@
  */
 
 export * from './aiChatInput';
+export * from './aiChatInputRepositoryContext';
 export * from './aiChatMessage';
 export * from './aiChatMessageRole';
 export * from './aiChatResponse';
 export * from './aiModel';
 export * from './healthStatus';
+export * from './repositoryConnectInput';
+export * from './repositoryEntry';
+export * from './repositoryEntryType';
+export * from './repositoryFile';
+export * from './repositoryFileInput';
+export * from './repositoryRef';
+export * from './repositorySearchInput';
+export * from './repositorySearchResult';
+export * from './repositoryTreeInput';

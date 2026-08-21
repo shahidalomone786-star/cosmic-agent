@@ -50,7 +50,18 @@ export const SendAiMessageBody = zod.object({
   "role": zod.enum(['user', 'assistant', 'system']),
   "content": zod.string()
 })).min(1),
-  "temperature": zod.number().min(sendAiMessageBodyTemperatureMin).max(sendAiMessageBodyTemperatureMax).nullish()
+  "temperature": zod.number().min(sendAiMessageBodyTemperatureMin).max(sendAiMessageBodyTemperatureMax).nullish(),
+  "repositoryContext": zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "paths": zod.array(zod.string())
+}).optional()
 })
 
 export const SendAiMessageResponse = zod.object({
@@ -78,9 +89,110 @@ export const StreamAiMessageBody = zod.object({
   "role": zod.enum(['user', 'assistant', 'system']),
   "content": zod.string()
 })).min(1),
-  "temperature": zod.number().min(streamAiMessageBodyTemperatureMin).max(streamAiMessageBodyTemperatureMax).nullish()
+  "temperature": zod.number().min(streamAiMessageBodyTemperatureMin).max(streamAiMessageBodyTemperatureMax).nullish(),
+  "repositoryContext": zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "paths": zod.array(zod.string())
+}).optional()
 })
 
 export const StreamAiMessageResponse = zod.unknown()
+
+
+/**
+ * @summary Connect a read-only GitHub repository
+ */
+export const ConnectRepositoryBody = zod.object({
+  "repositoryUrl": zod.string(),
+  "branch": zod.string().optional()
+})
+
+export const ConnectRepositoryResponse = zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+})
+
+
+/**
+ * @summary List one directory from a connected repository
+ */
+export const ListRepositoryTreeBody = zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "path": zod.string().optional()
+})
+
+export const ListRepositoryTreeResponseItem = zod.object({
+  "path": zod.string(),
+  "name": zod.string(),
+  "type": zod.enum(['file', 'directory']),
+  "size": zod.number().optional(),
+  "language": zod.string().optional()
+})
+export const ListRepositoryTreeResponse = zod.array(ListRepositoryTreeResponseItem)
+
+
+/**
+ * @summary Read a protected text file from a repository
+ */
+export const ReadRepositoryFileBody = zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "path": zod.string()
+})
+
+export const ReadRepositoryFileResponse = zod.object({
+  "path": zod.string(),
+  "language": zod.string(),
+  "size": zod.number(),
+  "content": zod.string(),
+  "truncated": zod.boolean()
+})
+
+
+/**
+ * @summary Search readable repository source
+ */
+export const SearchRepositoryBody = zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "query": zod.string()
+})
+
+export const SearchRepositoryResponseItem = zod.object({
+  "path": zod.string(),
+  "line": zod.number(),
+  "context": zod.string()
+})
+export const SearchRepositoryResponse = zod.array(SearchRepositoryResponseItem)
 
 

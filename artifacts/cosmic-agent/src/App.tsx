@@ -2,12 +2,13 @@ import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useStat
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type AiModel, useListAiModels } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
+import { RepositoryPanel, type RepositoryRef } from '@/components/repository-panel';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import {
   Aperture, Check, ChevronDown, Clipboard, Code2, Copy, Menu, MoreHorizontal,
-  Pencil, Plus, RefreshCw, Search, Send, Sparkles, Trash2, X, Square,
+  GitBranch, Pencil, Plus, RefreshCw, Search, Send, Sparkles, Trash2, X, Square,
 } from 'lucide-react';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
@@ -81,6 +82,11 @@ function Home() {
   const [toast, setToast] = useState('');
   const [modelOpen, setModelOpen] = useState(false);
   const [editingId, setEditingId] = useState('');
+  const [repository, setRepository] = useState<RepositoryRef | null>(() => {
+    try { return JSON.parse(localStorage.getItem('cosmic-repository') ?? 'null') as RepositoryRef | null; } catch { return null; }
+  });
+  const [contextPaths, setContextPaths] = useState<string[]>([]);
+  const [repositoryOpen, setRepositoryOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -88,6 +94,7 @@ function Home() {
   const selectedModel = models.find((model) => model.id === selectedModelId) ?? models[0] ?? fallbackModels[0];
 
   useEffect(() => { localStorage.setItem('cosmic-conversations', JSON.stringify(conversations)); }, [conversations]);
+  useEffect(() => { if (repository) localStorage.setItem('cosmic-repository', JSON.stringify(repository)); else localStorage.removeItem('cosmic-repository'); }, [repository]);
   useEffect(() => {
     if (!active) return;
     setSelectedModelId(active.modelId);
@@ -127,7 +134,7 @@ function Home() {
     setDraft(''); setIsStreaming(true); stickToBottom.current = true;
     const controller = new AbortController(); abortRef.current = controller;
     try {
-      const response = await fetch('/api/ai/chat/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: selectedModel.id, messages: [...conversation.messages, userMessage].map((message) => ({ role: message.role, content: message.content })) }), signal: controller.signal });
+      const response = await fetch('/api/ai/chat/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: selectedModel.id, messages: [...conversation.messages, userMessage].map((message) => ({ role: message.role, content: message.content })), repositoryContext: repository ? { repository, paths: contextPaths } : undefined }), signal: controller.signal });
       if (!response.ok || !response.body) { const body = await response.json().catch(() => null) as { error?: string } | null; throw new Error(body?.error ?? 'The provider is unavailable right now.'); }
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
       while (true) {
@@ -172,12 +179,13 @@ function Home() {
     </aside>
     {sidebarOpen && <button className="drawer-overlay" onClick={() => setSidebarOpen(false)} aria-label="Close sidebar" />}
     <main className="chat-main">
-      <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · no tools enabled</span></div></div><div className="header-status"><span className="status-dot" /> Ready</div></header>
+      <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · read-only mode</span></div></div><div className="header-actions">{repository && <button className="context-indicator" onClick={() => setRepositoryOpen(true)}><span className="status-dot" /> {repository.owner}/{repository.name}{contextPaths.length ? ` · ${contextPaths.length} files` : ''}</button>}<button className="repo-toggle" onClick={() => setRepositoryOpen((open) => !open)} aria-label="Toggle repository explorer"><GitBranch size={15} /> Repository</button><div className="header-status"><span className="status-dot" /> Ready</div></div></header>
       <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="message-column">{!active?.messages.length ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : active.messages.map((message, index) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}</div>
       </div>
-      <div className="composer-wrap"><form className="composer" onSubmit={handleSend}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder="Ask Cosmic Agent anything…" rows={1} aria-label="Message Cosmic Agent" /><div className="composer-bottom"><div className="composer-meta"><div className="model-picker"><button type="button" className="model-trigger" onClick={() => setModelOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={modelOpen}><Sparkles size={14} /><span>{selectedModel.displayName}</span><ChevronDown size={14} /></button>{modelOpen && <div className="model-menu" role="listbox">{models.map((model) => <button type="button" role="option" aria-selected={model.id === selectedModel.id} className={model.id === selectedModel.id ? 'selected' : ''} key={model.id} onClick={() => changeModel(model.id)}><span><strong>{model.displayName}</strong><small>{model.provider} · {model.capabilities.join(' · ')}</small></span>{model.id === selectedModel.id && <Check size={15} />}</button>)}</div>}</div><span className="composer-hint">Enter to send · Shift + Enter for newline</span></div>{isStreaming ? <button type="button" className="stop-button" onClick={() => abortRef.current?.abort()}><Square size={13} fill="currentColor" /> Stop</button> : <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="Send message"><Send size={16} /></button>}</div></form><p className="composer-disclaimer">Cosmic Agent can make mistakes. Review important responses before using them.</p></div>
+      <div className="composer-wrap">{contextPaths.length > 0 && <div className="context-chips" aria-label="Selected repository context">{contextPaths.map((path) => <button key={path} onClick={() => setContextPaths((current) => current.filter((item) => item !== path))}>@{path} <X size={11} /></button>)}</div>}<form className="composer" onSubmit={handleSend}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder={repository ? "Ask about this repository…" : "Ask Cosmic Agent anything…"} rows={1} aria-label="Message Cosmic Agent" /><div className="composer-bottom"><div className="composer-meta"><div className="model-picker"><button type="button" className="model-trigger" onClick={() => setModelOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={modelOpen}><Sparkles size={14} /><span>{selectedModel.displayName}</span><ChevronDown size={14} /></button>{modelOpen && <div className="model-menu" role="listbox">{models.map((model) => <button type="button" role="option" aria-selected={model.id === selectedModel.id} className={model.id === selectedModel.id ? 'selected' : ''} key={model.id} onClick={() => changeModel(model.id)}><span><strong>{model.displayName}</strong><small>{model.provider} · {model.capabilities.join(' · ')}</small></span>{model.id === selectedModel.id && <Check size={15} />}</button>)}</div>}</div><span className="composer-hint">Enter to send · Shift + Enter for newline</span></div>{isStreaming ? <button type="button" className="stop-button" onClick={() => abortRef.current?.abort()}><Square size={13} fill="currentColor" /> Stop</button> : <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="Send message"><Send size={16} /></button>}</div></form><p className="composer-disclaimer">Read-only mode · Cosmic Agent can explain code but cannot change it.</p></div>
     </main>
+    <RepositoryPanel open={repositoryOpen} repository={repository} onRepositoryChange={(next) => { setRepository(next); if (!next) setContextPaths([]); }} contextPaths={contextPaths} onAddContext={(path) => setContextPaths((current) => current.includes(path) ? current : [...current, path])} onRemoveContext={(path) => setContextPaths((current) => current.filter((item) => item !== path))} onClose={() => setRepositoryOpen(false)} />
     {toast && <div className="toast-note" role="status">{toast}</div>}
   </div>;
 }
