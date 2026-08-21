@@ -1,384 +1,194 @@
-import { type FormEvent, type ReactNode, useState } from 'react';
+import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { type AiModel, useListAiModels } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import {
-  Activity,
-  Aperture,
-  ArrowUpRight,
-  Check,
-  ChevronDown,
-  CircleHelp,
-  Clock3,
-  Command,
-  FileCode2,
-  GitBranch,
-  Info,
-  LayoutDashboard,
-  Menu,
-  MessageSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
-  PanelRight,
-  Plus,
-  RefreshCw,
-  Send,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  X,
+  Aperture, Check, ChevronDown, Clipboard, Code2, Copy, Menu, MoreHorizontal,
+  Pencil, Plus, RefreshCw, Search, Send, Sparkles, Trash2, X, Square,
 } from 'lucide-react';
-import {
-  Route,
-  Switch,
-  useLocation,
-  Router as WouterRouter,
-} from 'wouter';
+import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
 const queryClient = new QueryClient();
+type Role = 'user' | 'assistant';
+type ChatMessage = { id: string; role: Role; content: string; createdAt: number; error?: boolean; streaming?: boolean };
+type Conversation = { id: string; title: string; modelId: string; messages: ChatMessage[]; updatedAt: number };
 
-type ActivityEvent = {
-  id: string;
-  title: ReactNode;
-  time: string;
-  muted?: boolean;
-};
-
-type Message = {
-  id: string;
-  author: 'you' | 'cosmic';
-  time: string;
-  content: ReactNode;
-};
-
-const initialActivity: ActivityEvent[] = [
-  { id: 'connected', title: <>Workspace connected</>, time: 'just now' },
-  { id: 'branch', title: <>Target branch selected: <strong>main</strong></>, time: 'just now' },
-  { id: 'approval', title: <>Waiting for your task</>, time: 'next step', muted: true },
+const fallbackModels: AiModel[] = [
+  { id: 'openai/gpt-oss-120b', displayName: 'GPT OSS 120B', provider: 'groq', capabilities: ['coding', 'reasoning'], contextWindow: 131072, enabled: true, recommended: true },
+  { id: 'openai/gpt-oss-20b', displayName: 'GPT OSS 20B', provider: 'groq', capabilities: ['coding', 'reasoning', 'fast'], contextWindow: 131072, enabled: true, recommended: false },
 ];
-
-const initialMessages: Message[] = [
-  {
-    id: 'welcome',
-    author: 'cosmic',
-    time: 'now',
-    content: <>I’m ready when you are. Share a task and I’ll turn it into a reviewable plan before anything else.</>,
-  },
+const promptSuggestions = [
+  ['Explain this code', 'Walk me through a piece of code and highlight the most important decisions.'],
+  ['Help me build a React component', 'Help me build a polished, accessible React component from scratch.'],
+  ['Debug this error', 'Help me understand this error and create a focused fix.'],
+  ['Design an architecture', 'Help me compare architecture options for a new software project.'],
 ];
+const starterConversation = (): Conversation => ({ id: `conversation-${Date.now()}`, title: 'New conversation', modelId: fallbackModels[0].id, messages: [], updatedAt: Date.now() });
 
-const suggestions = [
-  'Tighten the empty state',
-  'Trace the auth flow',
-  'Add coverage for a bug',
-];
+function titleFromMessage(text: string) {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  return clean.length > 42 ? `${clean.slice(0, 42)}…` : clean || 'New conversation';
+}
+function readConversations(): Conversation[] {
+  try { return JSON.parse(localStorage.getItem('cosmic-conversations') ?? '[]') as Conversation[]; } catch { return []; }
+}
+function copyText(text: string) {
+  void navigator.clipboard?.writeText(text);
+}
+
+function Markdown({ content }: { content: string }) {
+  const blocks = content.split(/(```[\s\S]*?```)/g).filter(Boolean);
+  return <div className="markdown-content">{blocks.map((block, index) => {
+    if (block.startsWith('```')) {
+      const lines = block.replace(/^```/, '').replace(/```$/, '').replace(/^\n/, '').split('\n');
+      const language = lines[0] && !lines[0].includes(' ') ? lines.shift() : '';
+      const code = lines.join('\n');
+      return <div className="code-block" key={index}><div className="code-head"><span><Code2 size={13} />{language || 'code'}</span><button onClick={() => copyText(code)} aria-label="Copy code"><Copy size={13} /> Copy</button></div><pre><code>{code}</code></pre></div>;
+    }
+    return <MarkdownText key={index} text={block} />;
+  })}</div>;
+}
+function MarkdownText({ text }: { text: string }) {
+  return <>{text.split('\n').map((line, i) => {
+    const trimmed = line.trim();
+    if (!trimmed) return <div className="md-space" key={i} />;
+    if (trimmed.startsWith('### ')) return <h4 key={i}>{inlineMarkdown(trimmed.slice(4))}</h4>;
+    if (trimmed.startsWith('## ')) return <h3 key={i}>{inlineMarkdown(trimmed.slice(3))}</h3>;
+    if (trimmed.startsWith('# ')) return <h2 key={i}>{inlineMarkdown(trimmed.slice(2))}</h2>;
+    if (/^[-*] /.test(trimmed)) return <li key={i}>{inlineMarkdown(trimmed.slice(2))}</li>;
+    if (/^\d+\. /.test(trimmed)) return <li key={i}>{inlineMarkdown(trimmed.replace(/^\d+\. /, ''))}</li>;
+    return <p key={i}>{inlineMarkdown(line)}</p>;
+  })}</>;
+}
+function inlineMarkdown(text: string) {
+  const pieces = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+  return pieces.map((part, i) => part.startsWith('`') ? <code key={i}>{part.slice(1, -1)}</code> : part.startsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : part);
+}
 
 function Home() {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [activityOpen, setActivityOpen] = useState(false);
-  const [connectOpen, setConnectOpen] = useState(false);
-  const [approvalOpen, setApprovalOpen] = useState(false);
-  const [repository, setRepository] = useState('northstar / web-console');
-  const [branch, setBranch] = useState('main');
+  const { data: providerModels } = useListAiModels();
+  const models = providerModels?.filter((model) => model.enabled) ?? fallbackModels;
+  const [conversations, setConversations] = useState<Conversation[]>(readConversations);
+  const [activeId, setActiveId] = useState(() => readConversations()[0]?.id ?? '');
+  const [selectedModelId, setSelectedModelId] = useState(fallbackModels[0].id);
   const [draft, setDraft] = useState('');
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
-  const [activity, setActivity] = useState<ActivityEvent[]>(initialActivity);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [search, setSearch] = useState('');
   const [toast, setToast] = useState('');
+  const [modelOpen, setModelOpen] = useState(false);
+  const [editingId, setEditingId] = useState('');
+  const abortRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
+  const active = conversations.find((conversation) => conversation.id === activeId) ?? null;
+  const selectedModel = models.find((model) => model.id === selectedModelId) ?? models[0] ?? fallbackModels[0];
 
-  const notify = (message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast(''), 2600);
+  useEffect(() => { localStorage.setItem('cosmic-conversations', JSON.stringify(conversations)); }, [conversations]);
+  useEffect(() => {
+    if (!active) return;
+    setSelectedModelId(active.modelId);
+    requestAnimationFrame(() => { if (stickToBottom.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; });
+  }, [activeId]);
+  const filteredConversations = useMemo(() => conversations.filter((item) => item.title.toLowerCase().includes(search.toLowerCase())), [conversations, search]);
+  const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(''), 2600); };
+  const updateActive = (fn: (conversation: Conversation) => Conversation) => setConversations((current) => current.map((item) => item.id === activeId ? fn(item) : item));
+  const newChat = () => {
+    const next = starterConversation();
+    setConversations((current) => [next, ...current]); setActiveId(next.id); setSelectedModelId(next.modelId); setDraft(''); setSidebarOpen(false);
   };
-
-  const handleSend = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmed = draft.trim();
-    if (!trimmed) return;
-    setMessages((current) => [
-      ...current,
-      { id: `user-${Date.now()}`, author: 'you', time: 'now', content: trimmed },
-      {
-        id: `agent-${Date.now()}`,
-        author: 'cosmic',
-        time: 'now',
-        content: <>I’ve captured that as a proposed change. I’ll outline the files, constraints, and checks for your review next.</>,
-      },
-    ]);
-    setActivity((current) => [
-      ...current.filter((item) => item.id !== 'approval'),
-      { id: `plan-${Date.now()}`, title: <>Plan drafted for review</>, time: 'just now' },
-      { id: 'approval', title: <>Explicit approval required</>, time: 'next step', muted: true },
-    ]);
-    setDraft('');
-    notify('Plan staged for your review');
+  const selectConversation = (id: string) => { setActiveId(id); setSidebarOpen(false); };
+  const rename = (conversation: Conversation) => {
+    const next = window.prompt('Rename conversation', conversation.title);
+    if (next?.trim()) setConversations((current) => current.map((item) => item.id === conversation.id ? { ...item, title: next.trim() } : item));
   };
-
-  const chooseSuggestion = (suggestion: string) => {
-    setDraft(`${suggestion} in ${repository}`);
-    notify('Prompt added to the composer');
+  const deleteConversation = (id: string) => {
+    setConversations((current) => { const next = current.filter((item) => item.id !== id); if (id === activeId) { setActiveId(next[0]?.id ?? ''); if (!next.length) setSelectedModelId(fallbackModels[0].id); } return next; });
   };
-
-  const saveConnection = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setConnectOpen(false);
-    setActivity((current) => [
-      { id: `connected-${Date.now()}`, title: <>Workspace connected</>, time: 'just now' },
-      { id: 'branch', title: <>Target branch selected: <strong>{branch}</strong></>, time: 'just now' },
-      ...current.filter((item) => item.id !== 'connected' && item.id !== 'branch'),
-    ]);
-    notify('Workspace details saved locally');
+  const changeModel = (modelId: string) => {
+    setSelectedModelId(modelId);
+    if (active) updateActive((item) => ({ ...item, modelId }));
+    setModelOpen(false);
   };
-
-  const approvePlan = () => {
-    setApprovalOpen(false);
-    setActivity((current) => [
-      { id: `approved-${Date.now()}`, title: <>Approval recorded for planned activity</>, time: 'just now' },
-      ...current.filter((item) => item.id !== 'approval'),
-    ]);
-    notify('Approval recorded — no execution has started');
+  const handleSend = async (event?: FormEvent) => {
+    event?.preventDefault();
+    const text = draft.trim();
+    if (!text || isStreaming || !selectedModel) return;
+    let conversation = active;
+    if (!conversation) { conversation = starterConversation(); conversation.modelId = selectedModel.id; setConversations((current) => [conversation!, ...current]); setActiveId(conversation.id); }
+    const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', content: text, createdAt: Date.now() };
+    const assistantId = `assistant-${Date.now()}`;
+    const assistantMessage: ChatMessage = { id: assistantId, role: 'assistant', content: '', createdAt: Date.now(), streaming: true };
+    const conversationId = conversation.id;
+    setConversations((current) => current.map((item) => item.id === conversationId ? { ...item, title: item.title === 'New conversation' ? titleFromMessage(text) : item.title, modelId: selectedModel.id, messages: [...item.messages, userMessage, assistantMessage], updatedAt: Date.now() } : item));
+    setDraft(''); setIsStreaming(true); stickToBottom.current = true;
+    const controller = new AbortController(); abortRef.current = controller;
+    try {
+      const response = await fetch('/api/ai/chat/stream', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: selectedModel.id, messages: [...conversation.messages, userMessage].map((message) => ({ role: message.role, content: message.content })) }), signal: controller.signal });
+      if (!response.ok || !response.body) { const body = await response.json().catch(() => null) as { error?: string } | null; throw new Error(body?.error ?? 'The provider is unavailable right now.'); }
+      const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+      while (true) {
+        const chunk = await reader.read(); if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const events = buffer.split('\n\n'); buffer = events.pop() ?? '';
+        for (const event of events) {
+          const line = event.split('\n').find((entry) => entry.startsWith('data: ')); if (!line) continue;
+          const data = line.slice(6); if (data === '[DONE]') continue;
+          const parsed = JSON.parse(data) as { token?: string; error?: string }; if (parsed.error) throw new Error(parsed.error);
+          if (parsed.token) setConversations((current) => current.map((item) => item.id === conversationId ? { ...item, messages: item.messages.map((message) => message.id === assistantId ? { ...message, content: message.content + parsed.token } : message) } : item));
+          if (stickToBottom.current && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      }
+      setConversations((current) => current.map((item) => item.id === conversationId ? { ...item, messages: item.messages.map((message) => message.id === assistantId ? { ...message, streaming: false, content: message.content || 'The provider returned an empty response.' } : message) } : item));
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') notify('Generation stopped');
+      else {
+        const message = error instanceof Error ? error.message : 'The network connection failed.';
+        setConversations((current) => current.map((item) => item.id === conversationId ? { ...item, messages: item.messages.map((entry) => entry.id === assistantId ? { ...entry, content: friendlyError(message), error: true, streaming: false } : entry) } : item));
+      }
+    } finally { setIsStreaming(false); abortRef.current = null; }
   };
-
-  const resetWorkspace = () => {
-    setMessages(initialMessages);
-    setActivity(initialActivity);
-    setDraft('');
-    notify('Workspace returned to welcome state');
+  const retry = (message: ChatMessage) => {
+    const previous = active?.messages[active.messages.findIndex((item) => item.id === message.id) - 1];
+    if (previous?.role === 'user') { setDraft(previous.content); window.setTimeout(() => void handleSend(), 0); }
   };
+  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void handleSend(); } };
+  const onScroll = () => { if (!scrollRef.current) return; const distance = scrollRef.current.scrollHeight - scrollRef.current.scrollTop - scrollRef.current.clientHeight; stickToBottom.current = distance < 120; };
 
-  return (
-    <div className="cosmic-app">
-      <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`} data-testid="sidebar-navigation">
-        <div className="brand-lockup">
-          <div className="brand-mark" data-testid="brand-mark"><Aperture /></div>
-          <span className="brand-name">COSMIC AGENT</span>
-          <span className="brand-phase">P1</span>
-        </div>
-
-        <div className="sidebar-label">Workspace</div>
-        <nav className="sidebar-nav" aria-label="Workspace navigation">
-          <button className="sidebar-link active" onClick={() => notify('Workspace is already open')} data-testid="nav-workspace">
-            <LayoutDashboard /><span>Workspace</span>
-          </button>
-          <button className="sidebar-link" onClick={() => notify('Conversation view is part of this workspace')} data-testid="nav-conversation">
-            <MessageSquare /><span>Conversation</span><span className="sidebar-badge">1</span>
-          </button>
-          <button className="sidebar-link" onClick={() => setActivityOpen(true)} data-testid="nav-activity">
-            <Activity /><span>Activity</span>
-          </button>
-        </nav>
-
-        <div className="sidebar-label" style={{ marginTop: 25 }}>Controls</div>
-        <nav className="sidebar-nav" aria-label="Workspace controls">
-          <button className="sidebar-link" onClick={() => setConnectOpen(true)} data-testid="nav-repository">
-            <GitBranch /><span>Repository</span>
-          </button>
-          <button className="sidebar-link" onClick={() => notify('Preferences are coming in a later phase')} data-testid="nav-settings">
-            <Settings2 /><span>Preferences</span>
-          </button>
-        </nav>
-
-        <div className="workspace-mini" data-testid="workspace-summary">
-          <div className="mini-topline"><span>Current target</span><Check /></div>
-          <div className="mini-repo"><span className="mini-repo-dot" />{repository}</div>
-          <div className="mini-branch">{branch} · review only</div>
-        </div>
-
-        <div className="sidebar-footer">
-          <div className="profile-row">
-            <div className="avatar" data-testid="avatar-initials">AR</div>
-            <div><div className="profile-name">Avery Rowan</div><div className="profile-role">workspace owner</div></div>
-            <button className="sidebar-settings" onClick={() => notify('Profile controls are not connected')} aria-label="Open profile controls" data-testid="button-profile">
-              <ChevronDown size={14} />
-            </button>
-          </div>
-        </div>
-      </aside>
-
-      {sidebarOpen && <button className="drawer-backdrop" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} data-testid="button-close-navigation" />}
-
-      <main className="app-main">
-        <header className="topbar">
-          <div className="crumbs">
-            <button className="mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Open navigation" data-testid="button-open-navigation"><Menu /></button>
-            <span>Workspace</span><span className="crumb-divider">/</span><strong data-testid="text-page-title">New session</strong>
-          </div>
-          <div className="topbar-actions">
-            <button className="quiet-button" onClick={() => notify('Keyboard shortcuts are not active in Phase 1')} aria-label="Keyboard shortcuts" data-testid="button-shortcuts"><Command /></button>
-            <button className="quiet-button" onClick={() => notify('Help center is not connected')} aria-label="Help" data-testid="button-help"><CircleHelp /></button>
-            <button className="view-activity" onClick={() => setActivityOpen(true)} data-testid="button-view-activity"><PanelRight /> Activity</button>
-            <button className="secondary-button" onClick={() => setConnectOpen(true)} data-testid="button-connect-repository"><Plus /> Connect repository</button>
-          </div>
-        </header>
-
-        <div className="main-scroll">
-          <div className="welcome-grid">
-            <div className="eyebrow">Mission control for software changes</div>
-            <h1 className="hero-heading" data-testid="text-welcome-heading">Bring a task.<br /><em>Keep the controls.</em></h1>
-            <p className="hero-copy" data-testid="text-welcome-copy">COSMIC AGENT helps you move from a repository and a clear brief to an auditable plan. Nothing is read, changed, run, committed, or pushed without an explicit next step.</p>
-
-            <section className="command-panel" aria-label="Task composer">
-              <div className="panel-top">
-                <div className="panel-title"><Sparkles /> Start a workspace conversation</div>
-                <div className="status-chip" data-testid="status-simulation">Simulation mode</div>
-              </div>
-              <form className="prompt-form" onSubmit={handleSend}>
-                <textarea
-                  className="prompt-textarea"
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  placeholder="Describe the change you want to reason through…"
-                  aria-label="Describe a software change"
-                  data-testid="input-task-prompt"
-                />
-                <div className="prompt-footer">
-                  <div className="prompt-hint"><Info /> No repository activity will occur in this phase.</div>
-                  <button className="primary-button" type="submit" data-testid="button-send-task">Draft a plan <Send /></button>
-                </div>
-              </form>
-              <div className="suggestion-row">
-                {suggestions.map((suggestion) => (
-                  <button className="suggestion" key={suggestion} type="button" onClick={() => chooseSuggestion(suggestion)} data-testid={`button-suggestion-${suggestion.toLowerCase().replaceAll(' ', '-')}`}>
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <div className="surface-grid">
-              <section className="conversation-section" aria-label="Conversation">
-                <div className="section-heading"><h2>Conversation</h2><span data-testid="text-message-count">{messages.length} messages</span></div>
-                <div className="conversation-card" data-testid="conversation-card">
-                  {messages.map((message) => (
-                    <div className="conversation-item" key={message.id} data-testid={`message-${message.id}`}>
-                      <div className={`message-avatar ${message.author === 'cosmic' ? 'agent' : ''}`}>{message.author === 'cosmic' ? <Aperture size={13} /> : 'AR'}</div>
-                      <div className="message-body">
-                        <div className="message-meta"><strong>{message.author === 'cosmic' ? 'Cosmic Agent' : 'You'}</strong><time>{message.time}</time></div>
-                        <p>{message.content}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="trust-banner" data-testid="trust-banner">
-                  <ShieldCheck />
-                  <p><strong>Approval is the boundary.</strong> Plans are simulated here. An approval records intent only; it does not authorize hidden execution.</p>
-                </div>
-              </section>
-
-              <aside className="activity-column" aria-label="Activity">
-                <ActivityPanel activity={activity} onClear={() => { setActivity([]); notify('Activity cleared'); }} onReview={() => setApprovalOpen(true)} />
-              </aside>
-            </div>
-          </div>
-        </div>
-      </main>
-
-      {activityOpen && (
-        <>
-          <button className="drawer-backdrop" aria-label="Close activity drawer" onClick={() => setActivityOpen(false)} data-testid="button-close-activity" />
-          <aside className="activity-drawer" aria-label="Activity drawer">
-            <div className="drawer-head"><strong>Planned activity</strong><button className="drawer-close" onClick={() => setActivityOpen(false)} aria-label="Close activity" data-testid="button-dismiss-activity"><X /></button></div>
-            <ActivityPanel activity={activity} onClear={() => { setActivity([]); notify('Activity cleared'); }} onReview={() => setApprovalOpen(true)} />
-          </aside>
-        </>
-      )}
-
-      {connectOpen && (
-        <div className="modal-backdrop" role="presentation">
-          <form className="modal" onSubmit={saveConnection} role="dialog" aria-modal="true" aria-labelledby="connect-title">
-            <div className="modal-head">
-              <div><h3 id="connect-title">Set a workspace target</h3><p>This only changes the simulated session context.</p></div>
-              <button type="button" className="modal-close" onClick={() => setConnectOpen(false)} aria-label="Close repository dialog" data-testid="button-close-connect"><X size={17} /></button>
-            </div>
-            <div className="modal-body">
-              <label className="field-label" htmlFor="repository">Repository reference</label>
-              <input className="field-input" id="repository" value={repository} onChange={(event) => setRepository(event.target.value)} data-testid="input-repository" />
-              <label className="field-label" htmlFor="branch" style={{ marginTop: 17 }}>Target branch</label>
-              <input className="field-input" id="branch" value={branch} onChange={(event) => setBranch(event.target.value)} data-testid="input-branch" />
-              <div className="modal-note"><Info /><span>Phase 1 stores these labels in the current browser session. No repository is accessed.</span></div>
-            </div>
-            <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setConnectOpen(false)} data-testid="button-cancel-connect">Cancel</button><button type="submit" className="primary-button" data-testid="button-save-connect">Save target <Check /></button></div>
-          </form>
-        </div>
-      )}
-
-      {approvalOpen && (
-        <div className="modal-backdrop" role="presentation">
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="approval-title">
-            <div className="modal-head">
-              <div><h3 id="approval-title">Approve planned activity?</h3><p>Review the boundary before recording your intent.</p></div>
-              <button className="modal-close" onClick={() => setApprovalOpen(false)} aria-label="Close approval dialog" data-testid="button-close-approval"><X size={17} /></button>
-            </div>
-            <div className="modal-body">
-              <div className="trust-banner" style={{ marginTop: 0 }}><ShieldCheck /><p><strong>Safe by design.</strong> This records an approval for the simulated plan only. It will not read files, edit code, execute commands, run tests, create commits, or push changes.</p></div>
-            </div>
-            <div className="modal-actions"><button className="secondary-button" onClick={() => setApprovalOpen(false)} data-testid="button-cancel-approval">Keep reviewing</button><button className="primary-button" onClick={approvePlan} data-testid="button-approve-plan">Record approval <Check /></button></div>
-          </div>
-        </div>
-      )}
-
-      {toast && <div className="toast-note" role="status" data-testid="status-toast">{toast}</div>}
-      <button className="quiet-button" onClick={() => { setSidebarCollapsed((value) => !value); }} aria-label="Toggle sidebar" data-testid="button-toggle-sidebar" style={{ position: 'fixed', bottom: 15, left: sidebarCollapsed ? 77 : 273, zIndex: 35, background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))' }}>
-        {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-      </button>
-    </div>
-  );
-}
-
-function ActivityPanel({ activity, onClear, onReview }: { activity: ActivityEvent[]; onClear: () => void; onReview: () => void }) {
-  return (
-    <div className="activity-card">
-      <div className="section-heading">
-        <h2>Planned activity</h2>
-        <button className="quiet-button" onClick={onClear} aria-label="Clear activity" data-testid="button-clear-activity" style={{ color: 'hsl(var(--sidebar-foreground) / .45)', padding: 2 }}><RefreshCw size={12} /></button>
+  return <div className="chat-app">
+    <aside className={`conversation-sidebar ${sidebarOpen ? 'is-open' : ''}`}>
+      <div className="sidebar-brand"><div className="brand-mark"><Aperture size={16} /></div><span>Cosmic Agent</span><button className="icon-button mobile-close" onClick={() => setSidebarOpen(false)} aria-label="Close conversation history"><X size={17} /></button></div>
+      <button className="new-chat-button" onClick={newChat}><Plus size={17} /> New chat <span>⌘ K</span></button>
+      <label className="conversation-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search conversations" aria-label="Search conversations" /></label>
+      <div className="history-label">Recent conversations</div>
+      <div className="history-list">{filteredConversations.length ? filteredConversations.map((conversation) => <div className={`history-item ${conversation.id === activeId ? 'active' : ''}`} key={conversation.id}>
+        {editingId === conversation.id ? <input autoFocus defaultValue={conversation.title} onBlur={(event) => { const value = event.target.value.trim(); if (value) setConversations((current) => current.map((item) => item.id === conversation.id ? { ...item, title: value } : item)); setEditingId(''); }} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} /> : <button className="history-main" onClick={() => selectConversation(conversation.id)}><span>{conversation.title}</span><small>{conversation.messages.length ? `${conversation.messages.length} messages` : 'Empty chat'}</small></button>}
+        <div className="history-actions"><button onClick={() => { setEditingId(conversation.id); }} aria-label={`Rename ${conversation.title}`}><Pencil size={13} /></button><button onClick={() => deleteConversation(conversation.id)} aria-label={`Delete ${conversation.title}`}><Trash2 size={13} /></button></div>
+      </div>) : <div className="history-empty">{search ? 'No matching chats' : 'Your conversations will appear here.'}</div>}</div>
+      <div className="sidebar-bottom"><button className="clear-history" onClick={() => { if (window.confirm('Clear all conversation history?')) { setConversations([]); setActiveId(''); notify('Conversation history cleared'); } }}><Trash2 size={15} /> Clear history</button><div className="sidebar-account"><div className="account-avatar">AR</div><div><strong>Avery Rowan</strong><small>Workspace owner</small></div><MoreHorizontal size={16} /></div></div>
+    </aside>
+    {sidebarOpen && <button className="drawer-overlay" onClick={() => setSidebarOpen(false)} aria-label="Close sidebar" />}
+    <main className="chat-main">
+      <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · no tools enabled</span></div></div><div className="header-status"><span className="status-dot" /> Ready</div></header>
+      <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
+        <div className="message-column">{!active?.messages.length ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : active.messages.map((message, index) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}</div>
       </div>
-      <div className="activity-list" data-testid="activity-list">
-        {activity.length === 0 ? (
-          <div className="activity-text" data-testid="empty-activity"><strong>No activity yet.</strong><span className="activity-time">A new plan will appear here.</span></div>
-        ) : activity.map((item) => (
-          <div className="activity-item" key={item.id} data-testid={`activity-${item.id}`}>
-            <div className={`activity-dot ${item.muted ? 'muted' : ''}`} />
-            <div className="activity-text">{item.title}<span className="activity-time">{item.time}</span></div>
-          </div>
-        ))}
-        {activity.some((item) => item.id === 'approval') && (
-          <button className="primary-button" onClick={onReview} data-testid="button-review-approval" style={{ width: '100%', marginTop: 15, padding: '8px 10px', fontSize: 10 }}>
-            Review approval boundary <ArrowUpRight size={13} />
-          </button>
-        )}
-      </div>
-    </div>
-  );
+      <div className="composer-wrap"><form className="composer" onSubmit={handleSend}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder="Ask Cosmic Agent anything…" rows={1} aria-label="Message Cosmic Agent" /><div className="composer-bottom"><div className="composer-meta"><div className="model-picker"><button type="button" className="model-trigger" onClick={() => setModelOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={modelOpen}><Sparkles size={14} /><span>{selectedModel.displayName}</span><ChevronDown size={14} /></button>{modelOpen && <div className="model-menu" role="listbox">{models.map((model) => <button type="button" role="option" aria-selected={model.id === selectedModel.id} className={model.id === selectedModel.id ? 'selected' : ''} key={model.id} onClick={() => changeModel(model.id)}><span><strong>{model.displayName}</strong><small>{model.provider} · {model.capabilities.join(' · ')}</small></span>{model.id === selectedModel.id && <Check size={15} />}</button>)}</div>}</div><span className="composer-hint">Enter to send · Shift + Enter for newline</span></div>{isStreaming ? <button type="button" className="stop-button" onClick={() => abortRef.current?.abort()}><Square size={13} fill="currentColor" /> Stop</button> : <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="Send message"><Send size={16} /></button>}</div></form><p className="composer-disclaimer">Cosmic Agent can make mistakes. Review important responses before using them.</p></div>
+    </main>
+    {toast && <div className="toast-note" role="status">{toast}</div>}
+  </div>;
 }
 
-function Router() {
-  return (
-    <RoutedErrorBoundary>
-      <Switch>
-        <Route path="/" component={Home} />
-        <Route component={NotFound} />
-      </Switch>
-    </RoutedErrorBoundary>
-  );
+function EmptyState({ onPrompt }: { onPrompt: (prompt: string) => void }) {
+  return <div className="empty-state"><div className="empty-orb"><Aperture size={32} /></div><h1>How can I help you today?</h1><p>Reason through software changes, understand code, and shape better technical decisions with a clear, reviewable conversation.</p><div className="prompt-grid">{promptSuggestions.map(([label, prompt]) => <button key={label} onClick={() => onPrompt(prompt)}><span>{label}</span><small>{prompt}</small><Send size={14} /></button>)}</div></div>;
 }
-
-function RoutedErrorBoundary({ children }: { children: ReactNode }) {
-  const [location] = useLocation();
-  return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
+function MessageBubble({ message, onRetry, onEdit }: { message: ChatMessage; onRetry: () => void; onEdit: (text: string) => void }) {
+  return <article className={`message ${message.role} ${message.error ? 'error' : ''}`}><div className="message-avatar">{message.role === 'assistant' ? <Aperture size={15} /> : 'AR'}</div><div className="message-content"><div className="message-label"><strong>{message.role === 'assistant' ? 'Cosmic Agent' : 'You'}</strong><span>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>{message.error ? <div className="error-panel"><p>{message.content}</p><button onClick={onRetry}><RefreshCw size={14} /> Retry</button></div> : message.role === 'assistant' ? <Markdown content={message.content} /> : <p className="user-text">{message.content}</p>}{message.streaming && <span className="generation-cursor" aria-label="Generating response" />}{!message.streaming && <div className="message-actions"><button onClick={() => copyText(message.content)} aria-label="Copy message"><Copy size={13} /> Copy</button>{message.role === 'assistant' ? <><button onClick={onRetry}><RefreshCw size={13} /> Regenerate</button></> : <button onClick={() => onEdit(message.content)}><Pencil size={13} /> Edit</button>}</div>}</div></article>;
 }
-
-function App() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
-  );
-}
-
+function friendlyError(message: string) { const lower = message.toLowerCase(); if (lower.includes('rate') || lower.includes('limit')) return 'The provider is temporarily busy. Please wait a moment and try again.'; if (lower.includes('unavailable') || lower.includes('configured')) return 'This model is unavailable right now. Try another model from the selector.'; return 'We could not reach the provider. Check your connection and try again.'; }
+function Router() { return <ErrorBoundary><Switch><Route path="/" component={Home} /><Route component={NotFound} /></Switch></ErrorBoundary>; }
+function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router /></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
 export default App;

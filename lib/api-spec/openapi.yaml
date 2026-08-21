@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: ai
+    description: Provider-backed AI operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,71 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /ai/models:
+    get:
+      operationId: listAiModels
+      tags: [ai]
+      summary: List enabled AI models
+      description: Returns the approved model registry without provider credentials.
+      responses:
+        "200":
+          description: Enabled model registry
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AiModel"
+  /ai/chat:
+    post:
+      operationId: sendAiMessage
+      tags: [ai]
+      summary: Send a message to an approved AI model
+      description: Sends a conversation to the server-side provider layer. Provider credentials are never accepted from or returned to the client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiChatInput"
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiChatResponse"
+        "400":
+          description: Invalid request or unapproved model
+        "429":
+          description: Provider rate limit
+        "503":
+          description: Provider unavailable or not configured
+  /ai/chat/stream:
+    post:
+      operationId: streamAiMessage
+      tags: [ai]
+      summary: Stream a response from an approved AI model
+      description: Streams server-side provider output as server-sent events. Provider credentials are never accepted from or returned to the client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiChatInput"
+      responses:
+        "200":
+          description: Server-sent response stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Invalid request or unapproved model
+        "429":
+          description: Provider rate limit
+        "503":
+          description: Provider unavailable or not configured
 components:
   schemas:
     HealthStatus:
@@ -33,4 +100,76 @@ components:
           type: string
       required:
         - status
+    AiModel:
+      type: object
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        provider:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        contextWindow:
+          type: [number, "null"]
+        enabled:
+          type: boolean
+        recommended:
+          type: boolean
+      required:
+        - id
+        - displayName
+        - provider
+        - capabilities
+        - contextWindow
+        - enabled
+        - recommended
+    AiChatMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string
+      required:
+        - role
+        - content
+    AiChatInput:
+      type: object
+      properties:
+        model:
+          type: string
+          minLength: 1
+        messages:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AiChatMessage"
+        temperature:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 2
+      required:
+        - model
+        - messages
+    AiChatResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        model:
+          type: string
+        content:
+          type: string
+        provider:
+          type: string
+      required:
+        - id
+        - model
+        - content
+        - provider
 
