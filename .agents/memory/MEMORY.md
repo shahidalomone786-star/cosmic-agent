@@ -1,2 +1,3 @@
 - [GitHub repository errors](github-repository-errors.md) — Preserve endpoint-specific GitHub errors; anonymous rate limits must never look like missing repositories.
 - [Repository AI grounding](repository-ai-grounding.md) — Fail closed when source retrieval is unavailable; never let the model infer repository facts.
+- [Validation runner environment](validation-runner-environment.md) — Fixed validation commands need safe frontend routing defaults outside managed workflows.

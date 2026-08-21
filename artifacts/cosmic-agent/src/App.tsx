@@ -1,6 +1,6 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createChangeProposal, type AiModel, type ChangeProposal, useListAiModels } from '@workspace/api-client-react';
+import { createChangeProposal, type AiModel, type ChangeExecutionResult, type ChangeProposal, useListAiModels } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { RepositoryPanel, type RepositoryRef } from '@/components/repository-panel';
 import { Toaster } from '@/components/ui/toaster';
@@ -110,6 +110,18 @@ function Home() {
   const filteredConversations = useMemo(() => conversations.filter((item) => item.title.toLowerCase().includes(search.toLowerCase())), [conversations, search]);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(''), 2600); };
   const updateActive = (fn: (conversation: Conversation) => Conversation) => setConversations((current) => current.map((item) => item.id === activeId ? fn(item) : item));
+  const recordAppliedEvent = (result: ChangeExecutionResult) => {
+    updateActive((item) => ({
+      ...item,
+      updatedAt: Date.now(),
+      messages: [...item.messages, {
+        id: `execution-${Date.now()}`,
+        role: 'assistant',
+        content: `Applied approved changes to ${result.files.length} ${result.files.length === 1 ? 'file' : 'files'}.\n\nChanges applied locally. Nothing has been committed or pushed.`,
+        createdAt: Date.now(),
+      }],
+    }));
+  };
   const newChat = () => {
     const next = starterConversation();
     setConversations((current) => [next, ...current]); setActiveId(next.id); setSelectedModelId(next.modelId); setDraft(''); setSidebarOpen(false);
@@ -204,7 +216,7 @@ function Home() {
     <main className="chat-main">
       <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · read-only mode</span></div></div><div className="header-actions">{repository && <button className="context-indicator" onClick={() => setRepositoryOpen(true)}><span className="status-dot" /> {repository.owner}/{repository.name}{contextPaths.length ? ` · ${contextPaths.length} files` : ''}</button>}<button className="repo-toggle" onClick={() => setRepositoryOpen((open) => !open)} aria-label="Toggle repository explorer"><GitBranch size={15} /> Repository</button><div className="header-status"><span className="status-dot" /> Ready</div></div></header>
        <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
-          <div className="message-column">{!active?.messages.length && !proposal && !isProposing ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{isProposing && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>Reading selected files and preparing a safe diff preview…</span></div>}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => setProposal(null)} onRegenerate={() => { setProposal(null); setDraft(proposalRequest); }} />}</>}</div>
+          <div className="message-column">{!active?.messages.length && !proposal && !isProposing ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{isProposing && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>Reading selected files and preparing a safe diff preview…</span></div>}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => setProposal(null)} onRegenerate={() => { setProposal(null); setDraft(proposalRequest); }} onApplied={(result) => recordAppliedEvent(result)} />}</>}</div>
       </div>
        <div className="composer-wrap">{contextPaths.length > 0 && <div className="context-chips" aria-label="Selected repository context">{contextPaths.map((path) => <button key={path} onClick={() => setContextPaths((current) => current.filter((item) => item !== path))}>@{path} <X size={11} /></button>)}</div>}<form className="composer" onSubmit={handleSend}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder={repository ? "Ask about this repository…" : "Ask Cosmic Agent anything…"} rows={1} aria-label="Message Cosmic Agent" /><div className="composer-bottom"><div className="composer-meta"><div className="model-picker"><button type="button" className="model-trigger" onClick={() => setModelOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={modelOpen}><Sparkles size={14} /><span>{selectedModel.displayName}</span><ChevronDown size={14} /></button>{modelOpen && <div className="model-menu" role="listbox">{models.map((model) => <button type="button" role="option" aria-selected={model.id === selectedModel.id} className={model.id === selectedModel.id ? 'selected' : ''} key={model.id} onClick={() => changeModel(model.id)}><span><strong>{model.displayName}</strong><small>{model.provider} · {model.capabilities.join(' · ')}</small></span>{model.id === selectedModel.id && <Check size={15} />}</button>)}</div>}</div><span className="composer-hint">Enter to send · Shift + Enter for newline</span></div>{isStreaming || isProposing ? <button type="button" className="stop-button" onClick={() => { abortRef.current?.abort(); setIsProposing(false); }}><Square size={13} fill="currentColor" /> Stop</button> : <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="Send message"><Send size={16} /></button>}</div></form><p className="composer-disclaimer">Proposal preview mode · approval never writes to the repository.</p></div>
     </main>

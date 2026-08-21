@@ -130,6 +130,50 @@ export interface ChangeProposal {
   affectedFiles: string[];
   addedLines: number;
   removedLines: number;
+  proposalId: string;
+}
+
+export interface ExecuteChangeProposalInput {
+  /** @minLength 1 */
+  proposalId: string;
+}
+
+export interface ProposalActionInput {
+  /** @minLength 1 */
+  proposalId: string;
+}
+
+export type ChangeExecutionResultStatus = typeof ChangeExecutionResultStatus[keyof typeof ChangeExecutionResultStatus];
+
+
+export const ChangeExecutionResultStatus = {
+  applied: 'applied',
+  validation_failed: 'validation_failed',
+} as const;
+
+export interface ChangeExecutionResult {
+  status: ChangeExecutionResultStatus;
+  proposalId: string;
+  files: string[];
+  addedLines: number;
+  removedLines: number;
+  typecheck: string;
+  build: string;
+  message: string;
+  canUndo: boolean;
+}
+
+export type ProposalActionResultStatus = typeof ProposalActionResultStatus[keyof typeof ProposalActionResultStatus];
+
+
+export const ProposalActionResultStatus = {
+  undone: 'undone',
+} as const;
+
+export interface ProposalActionResult {
+  status: ProposalActionResultStatus;
+  proposalId: string;
+  message: string;
 }
 
 export interface RepositoryConnectInput {

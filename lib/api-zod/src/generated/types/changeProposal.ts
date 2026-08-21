@@ -18,4 +18,5 @@ export interface ChangeProposal {
   affectedFiles: string[];
   addedLines: number;
   removedLines: number;
+  proposalId: string;
 }

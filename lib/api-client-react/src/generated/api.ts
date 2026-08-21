@@ -23,9 +23,13 @@ import type {
   AiChatInput,
   AiChatResponse,
   AiModel,
+  ChangeExecutionResult,
   ChangeProposal,
   ChangeProposalInput,
+  ExecuteChangeProposalInput,
   HealthStatus,
+  ProposalActionInput,
+  ProposalActionResult,
   RepositoryConnectInput,
   RepositoryEntry,
   RepositoryFile,
@@ -434,6 +438,150 @@ export const useCreateChangeProposal = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getCreateChangeProposalMutationOptions(options));
+    }
+
+export const getExecuteChangeProposalUrl = () => {
+
+
+
+
+  return `/api/ai/change-proposal/execute`
+}
+
+/**
+ * Applies only a server-held proposal after explicit approval. Never commits or pushes.
+ * @summary Apply an approved proposal locally and validate it
+ */
+export const executeChangeProposal = async (executeChangeProposalInput: ExecuteChangeProposalInput, options?: Parameters<typeof customFetch>[1]): Promise<ChangeExecutionResult> => {
+
+  return customFetch<ChangeExecutionResult>(getExecuteChangeProposalUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(executeChangeProposalInput)
+  }
+);}
+
+
+
+
+
+export const getExecuteChangeProposalMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof executeChangeProposal>>, TError,{data: BodyType<ExecuteChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof executeChangeProposal>>, TError,{data: BodyType<ExecuteChangeProposalInput>}, TContext> => {
+
+const mutationKey = ['executeChangeProposal'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof executeChangeProposal>>, {data: BodyType<ExecuteChangeProposalInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  executeChangeProposal(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ExecuteChangeProposalMutationResult = NonNullable<Awaited<ReturnType<typeof executeChangeProposal>>>
+    export type ExecuteChangeProposalMutationBody = BodyType<ExecuteChangeProposalInput>
+    export type ExecuteChangeProposalMutationError = ErrorType<void>
+
+    /**
+ * @summary Apply an approved proposal locally and validate it
+ */
+export const useExecuteChangeProposal = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof executeChangeProposal>>, TError,{data: BodyType<ExecuteChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof executeChangeProposal>>,
+        TError,
+        {data: BodyType<ExecuteChangeProposalInput>},
+        TContext
+      > => {
+      return useMutation(getExecuteChangeProposalMutationOptions(options));
+    }
+
+export const getUndoChangeProposalUrl = () => {
+
+
+
+
+  return `/api/ai/change-proposal/undo`
+}
+
+/**
+ * Restores the exact server-held pre-apply snapshot. Never commits or pushes.
+ * @summary Undo a previously applied local proposal
+ */
+export const undoChangeProposal = async (proposalActionInput: ProposalActionInput, options?: Parameters<typeof customFetch>[1]): Promise<ProposalActionResult> => {
+
+  return customFetch<ProposalActionResult>(getUndoChangeProposalUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(proposalActionInput)
+  }
+);}
+
+
+
+
+
+export const getUndoChangeProposalMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof undoChangeProposal>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof undoChangeProposal>>, TError,{data: BodyType<ProposalActionInput>}, TContext> => {
+
+const mutationKey = ['undoChangeProposal'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof undoChangeProposal>>, {data: BodyType<ProposalActionInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  undoChangeProposal(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UndoChangeProposalMutationResult = NonNullable<Awaited<ReturnType<typeof undoChangeProposal>>>
+    export type UndoChangeProposalMutationBody = BodyType<ProposalActionInput>
+    export type UndoChangeProposalMutationError = ErrorType<void>
+
+    /**
+ * @summary Undo a previously applied local proposal
+ */
+export const useUndoChangeProposal = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof undoChangeProposal>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof undoChangeProposal>>,
+        TError,
+        {data: BodyType<ProposalActionInput>},
+        TContext
+      > => {
+      return useMutation(getUndoChangeProposalMutationOptions(options));
     }
 
 export const getConnectRepositoryUrl = () => {

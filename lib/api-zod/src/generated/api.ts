@@ -155,7 +155,50 @@ export const CreateChangeProposalResponse = zod.object({
 })),
   "affectedFiles": zod.array(zod.string()),
   "addedLines": zod.number(),
-  "removedLines": zod.number()
+  "removedLines": zod.number(),
+  "proposalId": zod.string()
+})
+
+
+/**
+ * Applies only a server-held proposal after explicit approval. Never commits or pushes.
+ * @summary Apply an approved proposal locally and validate it
+ */
+
+
+
+export const ExecuteChangeProposalBody = zod.object({
+  "proposalId": zod.string().min(1)
+})
+
+export const ExecuteChangeProposalResponse = zod.object({
+  "status": zod.enum(['applied', 'validation_failed']),
+  "proposalId": zod.string(),
+  "files": zod.array(zod.string()),
+  "addedLines": zod.number(),
+  "removedLines": zod.number(),
+  "typecheck": zod.string(),
+  "build": zod.string(),
+  "message": zod.string(),
+  "canUndo": zod.boolean()
+})
+
+
+/**
+ * Restores the exact server-held pre-apply snapshot. Never commits or pushes.
+ * @summary Undo a previously applied local proposal
+ */
+
+
+
+export const UndoChangeProposalBody = zod.object({
+  "proposalId": zod.string().min(1)
+})
+
+export const UndoChangeProposalResponse = zod.object({
+  "status": zod.enum(['undone']),
+  "proposalId": zod.string(),
+  "message": zod.string()
 })
 
 

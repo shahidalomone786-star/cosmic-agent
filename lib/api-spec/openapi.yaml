@@ -122,6 +122,54 @@ paths:
           description: Binary, oversized, or non-applying change
         "503":
           description: Provider or repository unavailable
+  /ai/change-proposal/execute:
+    post:
+      operationId: executeChangeProposal
+      tags: [ai]
+      summary: Apply an approved proposal locally and validate it
+      description: Applies only a server-held proposal after explicit approval. Never commits or pushes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecuteChangeProposalInput"
+      responses:
+        "200":
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeExecutionResult"
+        "400":
+          description: Invalid or already handled proposal
+        "409":
+          description: File changed since proposal generation
+        "403":
+          description: Protected file or unsafe path
+        "422":
+          description: Invalid patch or validation failure
+  /ai/change-proposal/undo:
+    post:
+      operationId: undoChangeProposal
+      tags: [ai]
+      summary: Undo a previously applied local proposal
+      description: Restores the exact server-held pre-apply snapshot. Never commits or pushes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Undo result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProposalActionResult"
+        "400":
+          description: Invalid or unavailable proposal
   /repository/connect:
     post:
       operationId: connectRepository
@@ -363,7 +411,42 @@ components:
           items: { type: string }
         addedLines: { type: number }
         removedLines: { type: number }
-      required: [status, summary, explanation, risk, files, affectedFiles, addedLines, removedLines]
+        proposalId: { type: string }
+      required: [status, summary, explanation, risk, files, affectedFiles, addedLines, removedLines, proposalId]
+    ExecuteChangeProposalInput:
+      type: object
+      properties:
+        proposalId: { type: string, minLength: 1 }
+      required: [proposalId]
+    ProposalActionInput:
+      type: object
+      properties:
+        proposalId: { type: string, minLength: 1 }
+      required: [proposalId]
+    ChangeExecutionResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [applied, validation_failed]
+        proposalId: { type: string }
+        files: { type: array, items: { type: string } }
+        addedLines: { type: number }
+        removedLines: { type: number }
+        typecheck: { type: string }
+        build: { type: string }
+        message: { type: string }
+        canUndo: { type: boolean }
+      required: [status, proposalId, files, addedLines, removedLines, typecheck, build, message, canUndo]
+    ProposalActionResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [undone]
+        proposalId: { type: string }
+        message: { type: string }
+      required: [status, proposalId, message]
     RepositoryContextUsed:
       type: object
       properties:

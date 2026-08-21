@@ -8,7 +8,8 @@ import { providerManager } from "../ai/provider-manager";
 import { GroqProviderError } from "../ai/groq-provider";
 import { retrieveRepositoryContext, type RepositoryContextResult, type RepositoryRef } from "../repository/github-provider";
 import { CreateChangeProposalBody, CreateChangeProposalResponse } from "@workspace/api-zod";
-import { createChangeProposal, ProposalError } from "../ai/change-proposal";
+import { createChangeProposal, ProposalError, type ChangeProposal } from "../ai/change-proposal";
+import { executeProposal, registerProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
 
 const router: IRouter = Router();
 
@@ -33,9 +34,31 @@ router.post("/ai/change-proposal", async (req, res) => {
       parsed.data.repositoryContext.repository as RepositoryRef,
       parsed.data.repositoryContext.paths,
     );
+    registerProposal(proposal);
     res.json(CreateChangeProposalResponse.parse(proposal));
   } catch (error) {
     sendProposalError(res, error);
+  }
+});
+
+router.post("/ai/change-proposal/execute", async (req, res) => {
+  const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
+  if (!proposalId) { res.status(400).json({ error: "Approval requires a valid proposal.", code: "invalid_proposal" }); return; }
+  try {
+    res.json(await executeProposal(proposalId));
+  } catch (error) {
+    sendExecutionError(res, error);
+  }
+});
+
+router.post("/ai/change-proposal/undo", async (req, res) => {
+  const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
+  if (!proposalId) { res.status(400).json({ error: "Undo requires a valid proposal.", code: "invalid_proposal" }); return; }
+  try {
+    await undoProposal(proposalId);
+    res.json({ status: "undone", proposalId, message: "The exact pre-apply contents were restored locally." });
+  } catch (error) {
+    sendExecutionError(res, error);
   }
 });
 
@@ -143,6 +166,15 @@ function sendProposalError(res: Response, error: unknown): void {
     return;
   }
   sendProviderError(res, error);
+}
+
+function sendExecutionError(res: Response, error: unknown): void {
+  if (error instanceof PatchExecutionError) {
+    const status = error.code === "stale_file" ? 409 : ["protected_file", "unsafe_path"].includes(error.code) ? 403 : ["binary_file", "too_large", "validation_failed"].includes(error.code) ? 422 : 400;
+    res.status(status).json({ error: error.message, code: error.code });
+    return;
+  }
+  res.status(422).json({ error: "Execution failed and any partial changes were rolled back.", code: "validation_failed" });
 }
 
 export default router;

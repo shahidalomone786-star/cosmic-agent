@@ -16,6 +16,7 @@ export type ChangeProposalFile = {
 };
 
 export type ChangeProposal = {
+  proposalId: string;
   status: "proposal";
   summary: string;
   explanation: string;
@@ -159,7 +160,7 @@ export async function createChangeProposal(
 
   if (!files.length) throw new ProposalError("invalid_patch", "The model did not produce an applicable change.");
   const risk = parsed.risk === "HIGH" || parsed.risk === "MEDIUM" ? parsed.risk : "LOW";
-  return {
+  const proposal: ChangeProposal = {
     status: "proposal",
     summary: typeof parsed.summary === "string" ? parsed.summary : "Proposed repository change",
     explanation: typeof parsed.explanation === "string" ? parsed.explanation : "Review the proposed diff before any future execution step.",
@@ -168,7 +169,10 @@ export async function createChangeProposal(
     affectedFiles: files.map((file) => file.path),
     addedLines: files.reduce((count, file) => count + file.addedLines, 0),
     removedLines: files.reduce((count, file) => count + file.removedLines, 0),
+    proposalId: "",
   };
+  proposal.proposalId = proposalId(proposal);
+  return proposal;
 }
 
 function assertEditablePath(path: string): void {
@@ -246,5 +250,5 @@ function mapProviderError(error: unknown): ProposalError {
 }
 
 export function proposalId(proposal: ChangeProposal): string {
-  return createHash("sha256").update(proposal.files.map((file) => file.diff).join("\n")).digest("hex").slice(0, 12);
+  return createHash("sha256").update(proposal.files.map((file) => file.diff).join("\n")).digest("hex").slice(0, 16);
 }
