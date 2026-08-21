@@ -115,6 +115,51 @@ export const StreamAiMessageResponse = zod.unknown()
 
 
 /**
+ * Generates a bounded, validated diff preview. It never writes to GitHub, commits, pushes, deletes, or executes commands.
+ * @summary Generate a validated proposal-only code change
+ */
+
+
+
+
+export const CreateChangeProposalBody = zod.object({
+  "model": zod.string().min(1),
+  "request": zod.string().min(1),
+  "repositoryContext": zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "paths": zod.array(zod.string())
+})
+})
+
+export const CreateChangeProposalResponse = zod.object({
+  "status": zod.enum(['proposal']),
+  "summary": zod.string(),
+  "explanation": zod.string(),
+  "risk": zod.enum(['LOW', 'MEDIUM', 'HIGH']),
+  "files": zod.array(zod.object({
+  "path": zod.string(),
+  "language": zod.string(),
+  "originalCode": zod.string(),
+  "proposedCode": zod.string(),
+  "diff": zod.string(),
+  "explanation": zod.string(),
+  "addedLines": zod.number(),
+  "removedLines": zod.number()
+})),
+  "affectedFiles": zod.array(zod.string()),
+  "addedLines": zod.number(),
+  "removedLines": zod.number()
+})
+
+
+/**
  * @summary Connect a read-only GitHub repository
  */
 export const ConnectRepositoryBody = zod.object({

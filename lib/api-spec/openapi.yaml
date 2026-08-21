@@ -91,6 +91,37 @@ paths:
           description: Provider rate limit
         "503":
           description: Provider unavailable or not configured
+  /ai/change-proposal:
+    post:
+      operationId: createChangeProposal
+      tags: [ai]
+      summary: Generate a validated proposal-only code change
+      description: Generates a bounded, validated diff preview. It never writes to GitHub, commits, pushes, deletes, or executes commands.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeProposalInput"
+      responses:
+        "200":
+          description: Validated code change proposal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeProposal"
+        "400":
+          description: Invalid request, insufficient context, malformed model response, or invalid patch
+        "403":
+          description: Protected file or repository permission error
+        "404":
+          description: File not found
+        "429":
+          description: GitHub or provider rate limit
+        "422":
+          description: Binary, oversized, or non-applying change
+        "503":
+          description: Provider or repository unavailable
   /repository/connect:
     post:
       operationId: connectRepository
@@ -281,6 +312,58 @@ components:
         - model
         - content
         - provider
+    ChangeProposalInput:
+      type: object
+      properties:
+        model:
+          type: string
+          minLength: 1
+        request:
+          type: string
+          minLength: 1
+        repositoryContext:
+          type: object
+          properties:
+            repository:
+              $ref: "#/components/schemas/RepositoryRef"
+            paths:
+              type: array
+              items: { type: string }
+          required: [repository, paths]
+      required: [model, request, repositoryContext]
+    ChangeProposalFile:
+      type: object
+      properties:
+        path: { type: string }
+        language: { type: string }
+        originalCode: { type: string }
+        proposedCode: { type: string }
+        diff: { type: string }
+        explanation: { type: string }
+        addedLines: { type: number }
+        removedLines: { type: number }
+      required: [path, language, originalCode, proposedCode, diff, explanation, addedLines, removedLines]
+    ChangeProposal:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [proposal]
+        summary: { type: string }
+        explanation: { type: string }
+        risk:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChangeProposalFile"
+        affectedFiles:
+          type: array
+          items: { type: string }
+        addedLines: { type: number }
+        removedLines: { type: number }
+      required: [status, summary, explanation, risk, files, affectedFiles, addedLines, removedLines]
     RepositoryContextUsed:
       type: object
       properties:

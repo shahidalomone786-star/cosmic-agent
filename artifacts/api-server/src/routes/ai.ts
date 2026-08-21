@@ -7,12 +7,36 @@ import {
 import { providerManager } from "../ai/provider-manager";
 import { GroqProviderError } from "../ai/groq-provider";
 import { retrieveRepositoryContext, type RepositoryContextResult, type RepositoryRef } from "../repository/github-provider";
+import { CreateChangeProposalBody, CreateChangeProposalResponse } from "@workspace/api-zod";
+import { createChangeProposal, ProposalError } from "../ai/change-proposal";
 
 const router: IRouter = Router();
 
 router.get("/ai/models", (_req, res) => {
   const provider = providerManager.getProvider();
   res.json(ListAiModelsResponse.parse(provider.getModels()));
+});
+
+router.post("/ai/change-proposal", async (req, res) => {
+  const parsed = CreateChangeProposalBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Select readable repository files and describe the change you want to preview.", code: "invalid_request" });
+    return;
+  }
+
+  try {
+    const provider = providerManager.getProvider();
+    const proposal = await createChangeProposal(
+      provider,
+      parsed.data.model,
+      parsed.data.request,
+      parsed.data.repositoryContext.repository as RepositoryRef,
+      parsed.data.repositoryContext.paths,
+    );
+    res.json(CreateChangeProposalResponse.parse(proposal));
+  } catch (error) {
+    sendProposalError(res, error);
+  }
 });
 
 router.post("/ai/chat", async (req, res) => {
@@ -105,6 +129,20 @@ async function withRepositoryContext(request: PreparedAiRequest): Promise<Prepar
 function publicProviderError(error: unknown): string {
   if (error instanceof GroqProviderError) return error.message;
   return "The AI provider is temporarily unavailable.";
+}
+
+function sendProposalError(res: Response, error: unknown): void {
+  if (error instanceof ProposalError) {
+    const status =
+      error.code === "rate_limited" ? 429 :
+      ["protected_file", "permission_denied"].includes(error.code) ? 403 :
+      error.code === "file_not_found" ? 404 :
+      ["binary_file", "too_large"].includes(error.code) ? 422 :
+      error.code === "service_unavailable" ? 503 : 400;
+    res.status(status).json({ error: error.message, code: error.code });
+    return;
+  }
+  sendProviderError(res, error);
 }
 
 export default router;

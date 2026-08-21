@@ -81,6 +81,57 @@ export interface AiChatResponse {
   repositoryContext?: RepositoryContextUsed;
 }
 
+export type ChangeProposalInputRepositoryContext = {
+  repository: RepositoryRef;
+  paths: string[];
+};
+
+export interface ChangeProposalInput {
+  /** @minLength 1 */
+  model: string;
+  /** @minLength 1 */
+  request: string;
+  repositoryContext: ChangeProposalInputRepositoryContext;
+}
+
+export interface ChangeProposalFile {
+  path: string;
+  language: string;
+  originalCode: string;
+  proposedCode: string;
+  diff: string;
+  explanation: string;
+  addedLines: number;
+  removedLines: number;
+}
+
+export type ChangeProposalStatus = typeof ChangeProposalStatus[keyof typeof ChangeProposalStatus];
+
+
+export const ChangeProposalStatus = {
+  proposal: 'proposal',
+} as const;
+
+export type ChangeProposalRisk = typeof ChangeProposalRisk[keyof typeof ChangeProposalRisk];
+
+
+export const ChangeProposalRisk = {
+  LOW: 'LOW',
+  MEDIUM: 'MEDIUM',
+  HIGH: 'HIGH',
+} as const;
+
+export interface ChangeProposal {
+  status: ChangeProposalStatus;
+  summary: string;
+  explanation: string;
+  risk: ChangeProposalRisk;
+  files: ChangeProposalFile[];
+  affectedFiles: string[];
+  addedLines: number;
+  removedLines: number;
+}
+
 export interface RepositoryConnectInput {
   repositoryUrl: string;
   branch?: string;

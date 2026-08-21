@@ -23,6 +23,8 @@ import type {
   AiChatInput,
   AiChatResponse,
   AiModel,
+  ChangeProposal,
+  ChangeProposalInput,
   HealthStatus,
   RepositoryConnectInput,
   RepositoryEntry,
@@ -360,6 +362,78 @@ export const useStreamAiMessage = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getStreamAiMessageMutationOptions(options));
+    }
+
+export const getCreateChangeProposalUrl = () => {
+
+
+
+
+  return `/api/ai/change-proposal`
+}
+
+/**
+ * Generates a bounded, validated diff preview. It never writes to GitHub, commits, pushes, deletes, or executes commands.
+ * @summary Generate a validated proposal-only code change
+ */
+export const createChangeProposal = async (changeProposalInput: ChangeProposalInput, options?: Parameters<typeof customFetch>[1]): Promise<ChangeProposal> => {
+
+  return customFetch<ChangeProposal>(getCreateChangeProposalUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(changeProposalInput)
+  }
+);}
+
+
+
+
+
+export const getCreateChangeProposalMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createChangeProposal>>, TError,{data: BodyType<ChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createChangeProposal>>, TError,{data: BodyType<ChangeProposalInput>}, TContext> => {
+
+const mutationKey = ['createChangeProposal'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createChangeProposal>>, {data: BodyType<ChangeProposalInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createChangeProposal(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateChangeProposalMutationResult = NonNullable<Awaited<ReturnType<typeof createChangeProposal>>>
+    export type CreateChangeProposalMutationBody = BodyType<ChangeProposalInput>
+    export type CreateChangeProposalMutationError = ErrorType<void>
+
+    /**
+ * @summary Generate a validated proposal-only code change
+ */
+export const useCreateChangeProposal = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createChangeProposal>>, TError,{data: BodyType<ChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createChangeProposal>>,
+        TError,
+        {data: BodyType<ChangeProposalInput>},
+        TContext
+      > => {
+      return useMutation(getCreateChangeProposalMutationOptions(options));
     }
 
 export const getConnectRepositoryUrl = () => {
