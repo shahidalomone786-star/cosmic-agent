@@ -26,56 +26,111 @@ export type FileResult = {
 };
 
 const GITHUB_API = "https://api.github.com";
-const MAX_FILE_BYTES = 180_000;
+const MAX_FILE_BYTES = 240_000;
 const BLOCKED = /(^|\/)(node_modules|dist|build|\.git|\.cache|coverage)(\/|$)/i;
 const SECRET_FILE = /(^|\/)(\.env(\..*)?|.*\.(pem|key|p12|pfx|crt))$/i;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? process.env.GITHUB_API_TOKEN;
 
 export class RepositoryError extends Error {
-  constructor(readonly code: "not_connected" | "not_found" | "permission_denied" | "rate_limited" | "unsupported_binary" | "too_large" | "network", message: string) {
+  constructor(
+    readonly code:
+      | "invalid_url"
+      | "not_connected"
+      | "repository_not_found"
+      | "branch_not_found"
+      | "file_not_found"
+      | "permission_denied"
+      | "rate_limited"
+      | "unsupported_binary"
+      | "too_large"
+      | "network"
+      | "service_unavailable",
+    message: string,
+  ) {
     super(message);
   }
 }
 
 export function parseGitHubUrl(value: string): { owner: string; name: string } {
-  const normalized = value.trim().replace(/\.git$/, "").replace(/\/$/, "");
-  const match = normalized.match(/github\.com[/:]([^/]+)\/([^/]+)$/i);
-  if (!match) throw new RepositoryError("not_found", "Enter a valid GitHub repository URL, such as https://github.com/owner/repository.");
-  return { owner: match[1], name: match[2] };
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new RepositoryError("invalid_url", "Invalid repository URL. Use https://github.com/owner/repository.");
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "github.com") {
+    throw new RepositoryError("invalid_url", "Invalid repository URL. Use https://github.com/owner/repository.");
+  }
+
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (parts.length < 2) {
+    throw new RepositoryError("invalid_url", "Invalid repository URL. Use https://github.com/owner/repository.");
+  }
+  const owner = parts[0];
+  const name = parts[1].replace(/\.git$/i, "");
+  if (!owner || !name || owner === "." || owner === ".." || name === "." || name === "..") {
+    throw new RepositoryError("invalid_url", "Invalid repository URL. Use https://github.com/owner/repository.");
+  }
+  return { owner, name };
 }
 
-async function githubFetch<T>(path: string): Promise<T> {
+async function githubFetch<T>(path: string, notFoundMessage: string): Promise<T> {
   try {
-    const response = await fetch(`${GITHUB_API}${path}`, { headers: { Accept: "application/vnd.github+json", "User-Agent": "Cosmic-Agent-Read-Only" } });
-    if (response.status === 403) throw new RepositoryError("rate_limited", "GitHub is rate limiting public requests. Connect GitHub for higher-limit repository access.");
-    if (response.status === 404) throw new RepositoryError("not_found", "GitHub could not find that repository or file.");
-    if (response.status === 401) throw new RepositoryError("permission_denied", "This repository requires GitHub authorization. Connect GitHub to access private repositories.");
-    if (!response.ok) throw new RepositoryError("network", "GitHub is temporarily unavailable.");
-    return await response.json() as T;
+    const headers: Record<string, string> = {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "Cosmic-Agent-Read-Only",
+    };
+    if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
+    const response = await fetch(`${GITHUB_API}${path}`, { headers });
+    const responseBody = await response.json().catch(() => null) as { message?: string } | null;
+    const rateRemaining = response.headers.get("x-ratelimit-remaining");
+    if (response.status === 401) throw new RepositoryError("permission_denied", "GitHub authorization was rejected. Public repositories do not require a token.");
+    if (response.status === 403 || response.status === 429) {
+      const isRateLimit = response.status === 429 || rateRemaining === "0" || /rate limit/i.test(responseBody?.message ?? "");
+      throw new RepositoryError(isRateLimit ? "rate_limited" : "permission_denied", isRateLimit ? "GitHub API rate limit reached. Please try again later." : "GitHub denied access to this repository.");
+    }
+    if (response.status === 404) throw new RepositoryError("file_not_found", notFoundMessage);
+    if (response.status >= 500) throw new RepositoryError("service_unavailable", "GitHub service unavailable. Please try again later.");
+    if (!response.ok) throw new RepositoryError("network", "GitHub API request failed. Please try again later.");
+    return responseBody as T;
   } catch (error) {
     if (error instanceof RepositoryError) throw error;
     logger.warn({ err: error }, "GitHub read request failed");
-    throw new RepositoryError("network", "Could not reach GitHub. Check the repository URL and try again.");
+    throw new RepositoryError("network", "GitHub service unavailable. Please try again later.");
   }
 }
 
 export async function connectRepository(url: string, branch?: string): Promise<RepositoryRef> {
   const { owner, name } = parseGitHubUrl(url);
-  const repo = await githubFetch<{ id: number; html_url: string; default_branch: string; full_name: string }>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
-  return { id: String(repo.id), owner, name, branch: branch?.trim() || repo.default_branch, defaultBranch: repo.default_branch, webUrl: repo.html_url };
+  const repo = await githubFetch<{ id: number; html_url: string; default_branch: string; full_name: string }>(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+    "Repository not found on GitHub.",
+  ).catch((error: unknown) => {
+    if (error instanceof RepositoryError && error.code === "file_not_found") {
+      throw new RepositoryError("repository_not_found", "Repository not found on GitHub.");
+    }
+    throw error;
+  });
+  const defaultBranch = repo.default_branch;
+  const selectedBranch = branch?.trim() || defaultBranch;
+  await resolveBranchSha(owner, name, selectedBranch);
+  return { id: String(repo.id), owner, name, branch: selectedBranch, defaultBranch, webUrl: repo.html_url };
 }
 
 export async function listTree(repository: RepositoryRef, path = ""): Promise<TreeEntry[]> {
   if (BLOCKED.test(path) || SECRET_FILE.test(path)) return [];
   const ref = encodeURIComponent(repository.branch);
   const encodedPath = path ? `/${path.split("/").map(encodeURIComponent).join("/")}` : "";
-  const data = await githubFetch<Array<{ path: string; name: string; type: string; size?: number }>>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/contents${encodedPath}?ref=${ref}`);
+  await resolveBranchSha(repository.owner, repository.name, repository.branch);
+  const data = await githubFetch<Array<{ path: string; name: string; type: string; size?: number }>>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/contents${encodedPath}?ref=${ref}`, path ? "Directory not found on the selected branch." : "Repository tree not found on the selected branch.");
   return data.filter((entry) => !BLOCKED.test(entry.path) && !SECRET_FILE.test(entry.path)).map((entry) => ({ path: entry.path, name: entry.name, type: entry.type === "dir" ? ("directory" as const) : ("file" as const), size: entry.size, language: languageFor(entry.name) })).sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "directory" ? -1 : 1);
 }
 
 export async function readRepositoryFile(repository: RepositoryRef, path: string): Promise<FileResult> {
   if (BLOCKED.test(path) || SECRET_FILE.test(path)) throw new RepositoryError("permission_denied", "This file is protected from repository context.");
-  const data = await githubFetch<{ content?: string; encoding?: string; size?: number; type?: string }>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(repository.branch)}`);
-  if (data.type !== "file") throw new RepositoryError("not_found", "That path is not a readable file.");
+  await resolveBranchSha(repository.owner, repository.name, repository.branch);
+  const data = await githubFetch<{ content?: string; encoding?: string; size?: number; type?: string }>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(repository.branch)}`, "File not found on the selected branch.");
+  if (data.type !== "file") throw new RepositoryError("file_not_found", "File not found on the selected branch.");
   if ((data.size ?? 0) > MAX_FILE_BYTES) throw new RepositoryError("too_large", "This file is larger than the safe context limit. Search for a symbol instead.");
   if (!data.content || data.encoding !== "base64") throw new RepositoryError("unsupported_binary", "This file is not a supported text file.");
   const decoded = Buffer.from(data.content.replace(/\n/g, ""), "base64").toString("utf8");
@@ -85,7 +140,8 @@ export async function readRepositoryFile(repository: RepositoryRef, path: string
 export async function searchRepository(repository: RepositoryRef, query: string): Promise<Array<{ path: string; line: number; context: string }>> {
   const safeQuery = query.trim();
   if (!safeQuery) return [];
-  const treeResponse = await githubFetch<{ tree?: Array<{ path: string; type: string }> }>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/git/trees/${encodeURIComponent(repository.branch)}?recursive=1`);
+  const branchSha = await resolveBranchSha(repository.owner, repository.name, repository.branch);
+  const treeResponse = await githubFetch<{ tree?: Array<{ path: string; type: string }>; truncated?: boolean }>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/git/trees/${encodeURIComponent(branchSha)}?recursive=1`, "Repository tree not found on the selected branch.");
   const candidates = (treeResponse.tree ?? []).filter((entry) => entry.type === "blob" && !BLOCKED.test(entry.path) && !SECRET_FILE.test(entry.path)).slice(0, 500);
   const results: Array<{ path: string; line: number; context: string }> = [];
   for (const entry of candidates) {
@@ -98,6 +154,21 @@ export async function searchRepository(repository: RepositoryRef, query: string)
     } catch { /* Skip binary, blocked, and oversized files during broad search. */ }
   }
   return results;
+}
+
+async function resolveBranchSha(owner: string, name: string, branch: string): Promise<string> {
+  const encodedBranch = branch.split("/").map(encodeURIComponent).join("/");
+  const ref = await githubFetch<{ object?: { sha?: string; type?: string } }>(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${encodedBranch}`,
+    "Branch not found on the repository.",
+  ).catch((error: unknown) => {
+    if (error instanceof RepositoryError && error.code === "file_not_found") {
+      throw new RepositoryError("branch_not_found", "Branch not found on the repository.");
+    }
+    throw error;
+  });
+  if (!ref.object?.sha) throw new RepositoryError("branch_not_found", "Branch not found on the repository.");
+  return ref.object.sha;
 }
 
 export async function retrieveRepositoryContext(repository: RepositoryRef, paths: string[], question: string): Promise<string> {

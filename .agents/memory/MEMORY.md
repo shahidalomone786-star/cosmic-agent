@@ -1,0 +1,1 @@
+- [GitHub repository errors](github-repository-errors.md) — Preserve endpoint-specific GitHub errors; anonymous rate limits must never look like missing repositories.

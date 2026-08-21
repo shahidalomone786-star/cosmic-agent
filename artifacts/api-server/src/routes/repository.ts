@@ -6,7 +6,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(v
 const isRepositoryRef = (value: unknown): value is RepositoryRef => isRecord(value) && typeof value.owner === "string" && typeof value.name === "string" && typeof value.branch === "string" && typeof value.defaultBranch === "string" && typeof value.id === "string" && typeof value.webUrl === "string";
 const sendError = (res: { status: (code: number) => { json: (value: unknown) => void } }, error: unknown) => {
   if (error instanceof RepositoryError) {
-    const status = error.code === "rate_limited" ? 429 : error.code === "permission_denied" ? 403 : error.code === "not_found" ? 404 : 400;
+    const status = error.code === "rate_limited" ? 429 : error.code === "permission_denied" ? 403 : ["repository_not_found", "branch_not_found", "file_not_found"].includes(error.code) ? 404 : ["network", "service_unavailable"].includes(error.code) ? 503 : error.code === "unsupported_binary" || error.code === "too_large" ? 422 : 400;
     res.status(status).json({ error: error.message, code: error.code }); return;
   }
   res.status(503).json({ error: "Repository access is temporarily unavailable.", code: "network" });
@@ -14,7 +14,7 @@ const sendError = (res: { status: (code: number) => { json: (value: unknown) => 
 router.post("/repository/connect", async (req, res) => {
   const repositoryUrl = isRecord(req.body) && typeof req.body.repositoryUrl === "string" ? req.body.repositoryUrl : "";
   const branch = isRecord(req.body) && typeof req.body.branch === "string" ? req.body.branch : undefined;
-  if (!repositoryUrl.startsWith("http")) { res.status(400).json({ error: "Enter a valid repository URL." }); return; }
+  if (!repositoryUrl.trim()) { res.status(400).json({ error: "Invalid repository URL.", code: "invalid_url" }); return; }
   try { res.json(await connectRepository(repositoryUrl, branch)); } catch (error) { sendError(res, error); }
 });
 router.post("/repository/tree", async (req, res) => {
