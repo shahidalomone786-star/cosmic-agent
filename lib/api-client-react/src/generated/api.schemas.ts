@@ -167,6 +167,132 @@ export interface AiChatResponse {
   repositoryContext?: RepositoryContextUsed;
 }
 
+export type AgentToolDefinitionPermission = typeof AgentToolDefinitionPermission[keyof typeof AgentToolDefinitionPermission];
+
+
+export const AgentToolDefinitionPermission = {
+  read: 'read',
+  proposal: 'proposal',
+  approval_required: 'approval_required',
+} as const;
+
+export type AgentToolDefinitionSchema = {[key: string]: string};
+
+export interface AgentToolDefinition {
+  name: string;
+  permission: AgentToolDefinitionPermission;
+  schema: AgentToolDefinitionSchema;
+}
+
+export interface AgentSessionInput {
+  /**
+     * @minLength 1
+     * @maxLength 2000
+     */
+  task: string;
+  /** @minLength 1 */
+  model: string;
+  repository?: RepositoryRef;
+  /** @maxItems 20 */
+  paths?: string[];
+}
+
+export type AgentSessionStatus = typeof AgentSessionStatus[keyof typeof AgentSessionStatus];
+
+
+export const AgentSessionStatus = {
+  running: 'running',
+  waiting_approval: 'waiting_approval',
+  completed: 'completed',
+  failed: 'failed',
+} as const;
+
+export type AgentSessionCurrentStep = typeof AgentSessionCurrentStep[keyof typeof AgentSessionCurrentStep];
+
+
+export const AgentSessionCurrentStep = {
+  understand: 'understand',
+  plan: 'plan',
+  retrieve_context: 'retrieve_context',
+  act: 'act',
+  observe: 'observe',
+  verify: 'verify',
+  complete: 'complete',
+} as const;
+
+export type AgentSessionPlanItemStatus = typeof AgentSessionPlanItemStatus[keyof typeof AgentSessionPlanItemStatus];
+
+
+export const AgentSessionPlanItemStatus = {
+  pending: 'pending',
+  active: 'active',
+  complete: 'complete',
+  blocked: 'blocked',
+} as const;
+
+export type AgentSessionPlanItem = {
+  id: string;
+  title: string;
+  status: AgentSessionPlanItemStatus;
+};
+
+export type AgentSessionContext = {
+  filesIncluded: number;
+  approximateChars: number;
+  chunked: boolean;
+  warnings: string[];
+  offloadedResultId?: string;
+};
+
+export type AgentSessionToolResultsItemStatus = typeof AgentSessionToolResultsItemStatus[keyof typeof AgentSessionToolResultsItemStatus];
+
+
+export const AgentSessionToolResultsItemStatus = {
+  complete: 'complete',
+  failed: 'failed',
+} as const;
+
+export type AgentSessionToolResultsItem = {
+  tool: string;
+  status: AgentSessionToolResultsItemStatus;
+  summary: string;
+};
+
+export type AgentSessionProposal = {
+  proposalId: string;
+  files: string[];
+  risk: string;
+  summary: string;
+};
+
+export type AgentSessionEventsItem = {
+  id: string;
+  type: string;
+  label: string;
+  detail?: string;
+  timestamp: string;
+};
+
+export interface AgentSession {
+  id: string;
+  task: string;
+  status: AgentSessionStatus;
+  currentStep: AgentSessionCurrentStep;
+  iteration: number;
+  maxIterations: number;
+  plan: AgentSessionPlanItem[];
+  repository?: RepositoryRef;
+  selectedFiles: string[];
+  activeModel: string;
+  provider: string;
+  context: AgentSessionContext;
+  toolResults: AgentSessionToolResultsItem[];
+  proposal?: AgentSessionProposal;
+  events: AgentSessionEventsItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ChangeProposalInputRepositoryContext = {
   repository: RepositoryRef;
   paths: string[];

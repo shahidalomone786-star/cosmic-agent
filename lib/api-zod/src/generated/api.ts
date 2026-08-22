@@ -122,6 +122,156 @@ export const SendAiMessageResponse = zod.object({
 
 
 /**
+ * Returns read-only and approval-gated tools. No shell or arbitrary write tools are exposed.
+ * @summary List the bounded agent tool registry
+ */
+export const ListAgentToolsResponseItem = zod.object({
+  "name": zod.string(),
+  "permission": zod.enum(['read', 'proposal', 'approval_required']),
+  "schema": zod.record(zod.string(), zod.string())
+})
+export const ListAgentToolsResponse = zod.array(ListAgentToolsResponseItem)
+
+
+/**
+ * Runs the task understanding, context retrieval, and proposal loop within a fixed iteration limit. Human approval remains required before execution, validation, commit, or push.
+ * @summary Run a bounded approval-gated agent session
+ */
+export const createAgentSessionBodyTaskMax = 2000;
+
+
+export const createAgentSessionBodyPathsMax = 20;
+
+
+
+export const CreateAgentSessionBody = zod.object({
+  "task": zod.string().min(1).max(createAgentSessionBodyTaskMax),
+  "model": zod.string().min(1),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}).optional(),
+  "paths": zod.array(zod.string()).max(createAgentSessionBodyPathsMax).optional()
+})
+
+export const CreateAgentSessionResponse = zod.object({
+  "id": zod.string(),
+  "task": zod.string(),
+  "status": zod.enum(['running', 'waiting_approval', 'completed', 'failed']),
+  "currentStep": zod.enum(['understand', 'plan', 'retrieve_context', 'act', 'observe', 'verify', 'complete']),
+  "iteration": zod.number(),
+  "maxIterations": zod.number(),
+  "plan": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "status": zod.enum(['pending', 'active', 'complete', 'blocked'])
+})),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}).optional(),
+  "selectedFiles": zod.array(zod.string()),
+  "activeModel": zod.string(),
+  "provider": zod.string(),
+  "context": zod.object({
+  "filesIncluded": zod.number(),
+  "approximateChars": zod.number(),
+  "chunked": zod.boolean(),
+  "warnings": zod.array(zod.string()),
+  "offloadedResultId": zod.string().optional()
+}),
+  "toolResults": zod.array(zod.object({
+  "tool": zod.string(),
+  "status": zod.enum(['complete', 'failed']),
+  "summary": zod.string()
+})),
+  "proposal": zod.object({
+  "proposalId": zod.string(),
+  "files": zod.array(zod.string()),
+  "risk": zod.string(),
+  "summary": zod.string()
+}).optional(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "type": zod.string(),
+  "label": zod.string(),
+  "detail": zod.string().optional(),
+  "timestamp": zod.string()
+})),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})
+
+
+/**
+ * @summary Read agent session progress
+ */
+export const GetAgentSessionParams = zod.object({
+  "sessionId": zod.coerce.string()
+})
+
+export const GetAgentSessionResponse = zod.object({
+  "id": zod.string(),
+  "task": zod.string(),
+  "status": zod.enum(['running', 'waiting_approval', 'completed', 'failed']),
+  "currentStep": zod.enum(['understand', 'plan', 'retrieve_context', 'act', 'observe', 'verify', 'complete']),
+  "iteration": zod.number(),
+  "maxIterations": zod.number(),
+  "plan": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "status": zod.enum(['pending', 'active', 'complete', 'blocked'])
+})),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}).optional(),
+  "selectedFiles": zod.array(zod.string()),
+  "activeModel": zod.string(),
+  "provider": zod.string(),
+  "context": zod.object({
+  "filesIncluded": zod.number(),
+  "approximateChars": zod.number(),
+  "chunked": zod.boolean(),
+  "warnings": zod.array(zod.string()),
+  "offloadedResultId": zod.string().optional()
+}),
+  "toolResults": zod.array(zod.object({
+  "tool": zod.string(),
+  "status": zod.enum(['complete', 'failed']),
+  "summary": zod.string()
+})),
+  "proposal": zod.object({
+  "proposalId": zod.string(),
+  "files": zod.array(zod.string()),
+  "risk": zod.string(),
+  "summary": zod.string()
+}).optional(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "type": zod.string(),
+  "label": zod.string(),
+  "detail": zod.string().optional(),
+  "timestamp": zod.string()
+})),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string()
+})
+
+
+/**
  * Streams server-side provider output as server-sent events. Provider credentials are never accepted from or returned to the client.
  * @summary Stream a response from an approved AI model
  */

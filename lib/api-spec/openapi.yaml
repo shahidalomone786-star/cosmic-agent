@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: ai
     description: Provider-backed AI operations
+  - name: agent
+    description: Bounded, approval-gated agent runtime
 paths:
   /healthz:
     get:
@@ -79,6 +81,61 @@ paths:
           description: Provider rate limit
         "503":
           description: Provider unavailable or not configured
+  /ai/agent/tools:
+    get:
+      operationId: listAgentTools
+      tags: [agent]
+      summary: List the bounded agent tool registry
+      description: Returns read-only and approval-gated tools. No shell or arbitrary write tools are exposed.
+      responses:
+        "200":
+          description: Bounded tool definitions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentToolDefinition"
+  /ai/agent/sessions:
+    post:
+      operationId: createAgentSession
+      tags: [agent]
+      summary: Run a bounded approval-gated agent session
+      description: Runs the task understanding, context retrieval, and proposal loop within a fixed iteration limit. Human approval remains required before execution, validation, commit, or push.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentSessionInput"
+      responses:
+        "201":
+          description: Agent session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSession"
+        "400":
+          description: Invalid agent request
+  /ai/agent/sessions/{sessionId}:
+    get:
+      operationId: getAgentSession
+      tags: [agent]
+      summary: Read agent session progress
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Agent session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSession"
+        "404":
+          description: Session not found
   /ai/chat/stream:
     post:
       operationId: streamAiMessage
@@ -515,6 +572,85 @@ components:
         - model
         - content
         - provider
+    AgentToolDefinition:
+      type: object
+      properties:
+        name: { type: string }
+        permission: { type: string, enum: [read, proposal, approval_required] }
+        schema:
+          type: object
+          additionalProperties: { type: string }
+      required: [name, permission, schema]
+    AgentSessionInput:
+      type: object
+      properties:
+        task: { type: string, minLength: 1, maxLength: 2000 }
+        model: { type: string, minLength: 1 }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        paths: { type: array, items: { type: string }, maxItems: 20 }
+      required: [task, model]
+    AgentSession:
+      type: object
+      properties:
+        id: { type: string }
+        task: { type: string }
+        status: { type: string, enum: [running, waiting_approval, completed, failed] }
+        currentStep: { type: string, enum: [understand, plan, retrieve_context, act, observe, verify, complete] }
+        iteration: { type: number }
+        maxIterations: { type: number }
+        plan:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              title: { type: string }
+              status: { type: string, enum: [pending, active, complete, blocked] }
+            required: [id, title, status]
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        selectedFiles: { type: array, items: { type: string } }
+        activeModel: { type: string }
+        provider: { type: string }
+        context:
+          type: object
+          properties:
+            filesIncluded: { type: number }
+            approximateChars: { type: number }
+            chunked: { type: boolean }
+            warnings: { type: array, items: { type: string } }
+            offloadedResultId: { type: string }
+          required: [filesIncluded, approximateChars, chunked, warnings]
+        toolResults:
+          type: array
+          items:
+            type: object
+            properties:
+              tool: { type: string }
+              status: { type: string, enum: [complete, failed] }
+              summary: { type: string }
+            required: [tool, status, summary]
+        proposal:
+          type: object
+          properties:
+            proposalId: { type: string }
+            files: { type: array, items: { type: string } }
+            risk: { type: string }
+            summary: { type: string }
+          required: [proposalId, files, risk, summary]
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              type: { type: string }
+              label: { type: string }
+              detail: { type: string }
+              timestamp: { type: string }
+            required: [id, type, label, timestamp]
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      required: [id, task, status, currentStep, iteration, maxIterations, plan, selectedFiles, activeModel, provider, context, toolResults, events, createdAt, updatedAt]
     ChangeProposalInput:
       type: object
       properties:

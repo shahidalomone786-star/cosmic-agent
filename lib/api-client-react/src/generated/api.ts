@@ -20,6 +20,9 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AgentSession,
+  AgentSessionInput,
+  AgentToolDefinition,
   AiChatInput,
   AiChatResponse,
   AiModel,
@@ -379,6 +382,233 @@ export const useSendAiMessage = <TError = ErrorType<void>,
       > => {
       return useMutation(getSendAiMessageMutationOptions(options));
     }
+
+export const getListAgentToolsUrl = () => {
+
+
+
+
+  return `/api/ai/agent/tools`
+}
+
+/**
+ * Returns read-only and approval-gated tools. No shell or arbitrary write tools are exposed.
+ * @summary List the bounded agent tool registry
+ */
+export const listAgentTools = async ( options?: Parameters<typeof customFetch>[1]): Promise<AgentToolDefinition[]> => {
+
+  return customFetch<AgentToolDefinition[]>(getListAgentToolsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListAgentToolsQueryKey = () => {
+    return [
+    `/api/ai/agent/tools`
+    ] as const;
+    }
+
+
+export const getListAgentToolsQueryOptions = <TData = Awaited<ReturnType<typeof listAgentTools>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAgentTools>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAgentToolsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAgentTools>>> = ({ signal }) => listAgentTools({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAgentTools>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListAgentToolsQueryResult = NonNullable<Awaited<ReturnType<typeof listAgentTools>>>
+export type ListAgentToolsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List the bounded agent tool registry
+ */
+
+export function useListAgentTools<TData = Awaited<ReturnType<typeof listAgentTools>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAgentTools>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListAgentToolsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateAgentSessionUrl = () => {
+
+
+
+
+  return `/api/ai/agent/sessions`
+}
+
+/**
+ * Runs the task understanding, context retrieval, and proposal loop within a fixed iteration limit. Human approval remains required before execution, validation, commit, or push.
+ * @summary Run a bounded approval-gated agent session
+ */
+export const createAgentSession = async (agentSessionInput: AgentSessionInput, options?: Parameters<typeof customFetch>[1]): Promise<AgentSession> => {
+
+  return customFetch<AgentSession>(getCreateAgentSessionUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(agentSessionInput)
+  }
+);}
+
+
+
+
+
+export const getCreateAgentSessionMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAgentSession>>, TError,{data: BodyType<AgentSessionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createAgentSession>>, TError,{data: BodyType<AgentSessionInput>}, TContext> => {
+
+const mutationKey = ['createAgentSession'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createAgentSession>>, {data: BodyType<AgentSessionInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createAgentSession(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateAgentSessionMutationResult = NonNullable<Awaited<ReturnType<typeof createAgentSession>>>
+    export type CreateAgentSessionMutationBody = BodyType<AgentSessionInput>
+    export type CreateAgentSessionMutationError = ErrorType<void>
+
+    /**
+ * @summary Run a bounded approval-gated agent session
+ */
+export const useCreateAgentSession = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAgentSession>>, TError,{data: BodyType<AgentSessionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createAgentSession>>,
+        TError,
+        {data: BodyType<AgentSessionInput>},
+        TContext
+      > => {
+      return useMutation(getCreateAgentSessionMutationOptions(options));
+    }
+
+export const getGetAgentSessionUrl = (sessionId: string,) => {
+
+
+
+
+  return `/api/ai/agent/sessions/${sessionId}`
+}
+
+/**
+ * @summary Read agent session progress
+ */
+export const getAgentSession = async (sessionId: string, options?: Parameters<typeof customFetch>[1]): Promise<AgentSession> => {
+
+  return customFetch<AgentSession>(getGetAgentSessionUrl(sessionId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetAgentSessionQueryKey = (sessionId: string,) => {
+    return [
+    `/api/ai/agent/sessions/${sessionId}`
+    ] as const;
+    }
+
+
+export const getGetAgentSessionQueryOptions = <TData = Awaited<ReturnType<typeof getAgentSession>>, TError = ErrorType<void>>(sessionId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAgentSession>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAgentSessionQueryKey(sessionId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentSession>>> = ({ signal }) => getAgentSession(sessionId, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: sessionId !== null && sessionId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAgentSession>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetAgentSessionQueryResult = NonNullable<Awaited<ReturnType<typeof getAgentSession>>>
+export type GetAgentSessionQueryError = ErrorType<void>
+
+
+/**
+ * @summary Read agent session progress
+ */
+
+export function useGetAgentSession<TData = Awaited<ReturnType<typeof getAgentSession>>, TError = ErrorType<void>>(
+ sessionId: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAgentSession>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetAgentSessionQueryOptions(sessionId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
 export const getStreamAiMessageUrl = () => {
 

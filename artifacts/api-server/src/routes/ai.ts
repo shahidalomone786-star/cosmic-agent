@@ -1,4 +1,5 @@
 import { Router, type IRouter, type Response } from "express";
+import { AgentToolError, getAgentSession, getAgentToolDefinitions, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
 import {
   SendAiMessageBody,
   SendAiMessageResponse,
@@ -17,6 +18,40 @@ import { getGitHubResourceStatus } from "../repository/github-resource-manager";
 import { getContextResourceStatus, RETRY_CONTEXT_CHARS } from "../repository/context-manager";
 
 const router: IRouter = Router();
+
+router.get("/ai/agent/tools", (_req, res) => {
+  res.json(getAgentToolDefinitions());
+});
+
+router.post("/ai/agent/sessions", async (req, res) => {
+  const body = req.body as Partial<AgentRunInput>;
+  const task = typeof body.task === "string" ? body.task.trim() : "";
+  const model = typeof body.model === "string" ? body.model.trim() : "";
+  const paths = Array.isArray(body.paths) ? body.paths.filter((path): path is string => typeof path === "string") : [];
+  if (!task || !model) {
+    res.status(400).json({ error: "An agent task and approved model are required.", code: "invalid_request" });
+    return;
+  }
+  try {
+    const session = await runAgentSession(providerManager.getProvider(), { task, model, repository: body.repository, paths });
+    res.status(201).json(session);
+  } catch (error) {
+    if (error instanceof AgentToolError) {
+      res.status(error.code === "approval_required" ? 403 : 400).json({ error: error.message, code: error.code });
+      return;
+    }
+    sendProposalError(res, error);
+  }
+});
+
+router.get("/ai/agent/sessions/:sessionId", (req, res) => {
+  const session = getAgentSession(req.params.sessionId);
+  if (!session) {
+    res.status(404).json({ error: "Agent session not found.", code: "not_found" });
+    return;
+  }
+  res.json(session);
+});
 
 router.get("/ai/models", (_req, res) => {
   const provider = providerManager.getProvider();

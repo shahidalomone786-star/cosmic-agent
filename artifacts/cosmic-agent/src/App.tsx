@@ -1,6 +1,6 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createChangeProposal, type AiModel, type ChangeExecutionResult, type ChangeProposal, type CommitResult, type PushResult, useListAiModels } from '@workspace/api-client-react';
+import { createChangeProposal, createAgentSession, type AiModel, type AgentSession, type ChangeExecutionResult, type ChangeProposal, type CommitResult, type PushResult, useListAiModels } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { RepositoryPanel, type RepositoryRef } from '@/components/repository-panel';
 import { ResourceStatusPanel } from '@/components/resource-status-panel';
@@ -21,6 +21,7 @@ type UsedSource = { path: string; startLine?: number; endLine?: number };
 type ContextUsage = { paths: string[]; sources: UsedSource[]; warnings?: string[]; approximateChars?: number; chunked?: boolean };
 type ChatMessage = { id: string; role: Role; content: string; createdAt: number; error?: boolean; streaming?: boolean; repositoryContext?: ContextUsage };
 type Conversation = { id: string; title: string; modelId: string; messages: ChatMessage[]; updatedAt: number };
+type RuntimeSession = AgentSession & { proposalData?: ChangeProposal };
 
 const fallbackModels: AiModel[] = [
   { id: 'openai/gpt-oss-120b', displayName: 'GPT OSS 120B', provider: 'groq', capabilities: ['coding', 'reasoning'], contextWindow: 131072, enabled: true, recommended: true },
@@ -89,6 +90,7 @@ function Home() {
   const [proposal, setProposal] = useState<ChangeProposal | null>(null);
   const [proposalRequest, setProposalRequest] = useState('');
   const [isProposing, setIsProposing] = useState(false);
+  const [agentSession, setAgentSession] = useState<RuntimeSession | null>(null);
   const [editingId, setEditingId] = useState('');
   const [repository, setRepository] = useState<RepositoryRef | null>(() => {
     try { return JSON.parse(localStorage.getItem('cosmic-repository') ?? 'null') as RepositoryRef | null; } catch { return null; }
@@ -163,9 +165,10 @@ function Home() {
       setProposalRequest(text);
       setDraft('');
       setIsProposing(true);
-      try {
-        const nextProposal = await createChangeProposal({ model: selectedModel.id, request: text, repositoryContext: { repository, paths: contextPaths } });
-        setProposal(nextProposal);
+       try {
+         const nextSession = await createAgentSession({ model: selectedModel.id, task: text, repository, paths: contextPaths }) as RuntimeSession;
+         setAgentSession(nextSession);
+         if (nextSession.proposalData) setProposal(nextSession.proposalData);
       } catch (error) {
         notify(error instanceof Error ? error.message : 'Could not generate a change proposal.');
       } finally {
@@ -232,7 +235,7 @@ function Home() {
      <main className="chat-main">
        <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · read-only mode</span></div></div><div className="header-actions">{repository && <button className="context-indicator" onClick={() => setRepositoryOpen(true)}><span className="status-dot" /> {repository.owner}/{repository.name}{contextPaths.length ? ` · ${contextPaths.length} files` : ''}</button>}<button className="resource-toggle" onClick={() => setResourceOpen((open) => !open)} aria-label="Toggle resource status"><Activity size={15} /> Resources</button><button className="repo-toggle" onClick={() => setRepositoryOpen((open) => !open)} aria-label="Toggle repository explorer"><GitBranch size={15} /> Repository</button><div className="header-status"><span className="status-dot" /> Ready</div></div></header>
        <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
-           <div className="message-column">{!active?.messages.length && !proposal && !isProposing ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{isProposing && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>Reading selected files and preparing a safe diff preview…</span></div>}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => setProposal(null)} onRegenerate={() => { setProposal(null); setDraft(proposalRequest); }} onApplied={(result) => recordAppliedEvent(result)} onCommitted={(result) => recordCommittedEvent(result)} onPushed={(result) => recordPushedEvent(result)} />}</>}</div>
+         <div className="message-column">{!active?.messages.length && !proposal && !isProposing && !agentSession ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{isProposing && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>Reading selected files and preparing a safe diff preview…</span></div>}{agentSession && <AgentTimeline session={agentSession} />}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => { setProposal(null); setAgentSession(null); }} onRegenerate={() => { setProposal(null); setAgentSession(null); setDraft(proposalRequest); }} onApplied={(result) => recordAppliedEvent(result)} onCommitted={(result) => recordCommittedEvent(result)} onPushed={(result) => recordPushedEvent(result)} />}</>}</div>
       </div>
        <div className="composer-wrap">{contextPaths.length > 0 && <div className="context-chips" aria-label="Selected repository context">{contextPaths.map((path) => <button key={path} onClick={() => setContextPaths((current) => current.filter((item) => item !== path))}>@{path} <X size={11} /></button>)}</div>}<form className="composer" onSubmit={handleSend}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder={repository ? "Ask about this repository…" : "Ask Cosmic Agent anything…"} rows={1} aria-label="Message Cosmic Agent" /><div className="composer-bottom"><div className="composer-meta"><div className="model-picker"><button type="button" className="model-trigger" onClick={() => setModelOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={modelOpen}><Sparkles size={14} /><span>{selectedModel.displayName}</span><ChevronDown size={14} /></button>{modelOpen && <div className="model-menu" role="listbox">{models.map((model) => <button type="button" role="option" aria-selected={model.id === selectedModel.id} className={model.id === selectedModel.id ? 'selected' : ''} key={model.id} onClick={() => changeModel(model.id)}><span><strong>{model.displayName}</strong><small>{model.provider} · {model.capabilities.join(' · ')}</small></span>{model.id === selectedModel.id && <Check size={15} />}</button>)}</div>}</div><span className="composer-hint">Enter to send · Shift + Enter for newline</span></div>{isStreaming || isProposing ? <button type="button" className="stop-button" onClick={() => { abortRef.current?.abort(); setIsProposing(false); }}><Square size={13} fill="currentColor" /> Stop</button> : <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="Send message"><Send size={16} /></button>}</div></form><p className="composer-disclaimer">Proposal preview mode · approval never writes to the repository.</p></div>
     </main>
@@ -252,6 +255,16 @@ function SourceUsage({ usage }: { usage?: ContextUsage }) {
   const visibleSources = sources.slice(0, 4);
   if (!visibleSources.length) return null;
   return <div className="source-usage" data-testid="assistant-source-usage"><div className="source-usage-label"><FileCode2 size={13} /> Sources used <span>{sources.length > visibleSources.length ? `· ${sources.length - visibleSources.length} more` : '· bounded view'}</span></div><div className="source-usage-list">{visibleSources.map((source, index) => <span className="source-usage-item" data-testid={`assistant-source-${index}`} key={`${source.path}-${source.startLine ?? 0}`} title={source.path}>{source.path}{source.startLine ? `:${source.startLine}${source.endLine && source.endLine !== source.startLine ? `–${source.endLine}` : ''}` : ''}</span>)}</div></div>;
+}
+function AgentTimeline({ session }: { session: RuntimeSession }) {
+  const statusLabel = session.status === 'waiting_approval' ? 'Waiting for approval' : session.status === 'failed' ? 'Stopped safely' : session.status === 'completed' ? 'Complete' : 'Running';
+  return <section className="agent-timeline" aria-label="Agent execution timeline">
+    <div className="agent-timeline-head"><div><span className="agent-kicker"><Activity size={12} /> Agent runtime</span><strong>{session.task}</strong></div><span className={`agent-status ${session.status}`}>{statusLabel}</span></div>
+    <div className="agent-progress"><span style={{ width: `${Math.round((session.plan.filter((step) => step.status === 'complete').length / session.plan.length) * 100)}%` }} /></div>
+    <div className="agent-plan">{session.plan.map((step) => <div className={`agent-step ${step.status}`} key={step.id}><span className="agent-step-mark">{step.status === 'complete' ? '✓' : step.status === 'active' ? '●' : step.status === 'blocked' ? '!' : '○'}</span><span>{step.title}</span></div>)}</div>
+    <div className="agent-events">{session.events.slice(-6).map((event) => <div className="agent-event" key={event.id}><span className="agent-event-time">{new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><div><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}</div></div>)}</div>
+    <div className="agent-runtime-meta"><span>Iteration {session.iteration}/{session.maxIterations}</span><span>{session.toolResults.length} tool call{session.toolResults.length === 1 ? '' : 's'}</span><span>{session.context.filesIncluded} source{session.context.filesIncluded === 1 ? '' : 's'} included</span></div>
+  </section>;
 }
 function MessageBubble({ message, onRetry, onEdit }: { message: ChatMessage; onRetry: () => void; onEdit: (text: string) => void }) {
   return <article className={`message ${message.role} ${message.error ? 'error' : ''}`}><div className="message-avatar">{message.role === 'assistant' ? <Aperture size={15} /> : 'AR'}</div><div className="message-content"><div className="message-label"><strong>{message.role === 'assistant' ? 'Cosmic Agent' : 'You'}</strong><span>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>{message.error ? <div className="error-panel"><p>{message.content}</p><button onClick={onRetry}><RefreshCw size={14} /> Retry</button></div> : message.role === 'assistant' ? <><Markdown content={message.content} /><SourceUsage usage={message.repositoryContext} /></> : <p className="user-text">{message.content}</p>}{message.streaming && <span className="generation-cursor" aria-label="Generating response" />}{!message.streaming && <div className="message-actions"><button onClick={() => copyText(message.content)} aria-label="Copy message"><Copy size={13} /> Copy</button>{message.role === 'assistant' ? <><button onClick={onRetry}><RefreshCw size={13} /> Regenerate</button></> : <button onClick={() => onEdit(message.content)}><Pencil size={13} /> Edit</button>}</div>}</div></article>;

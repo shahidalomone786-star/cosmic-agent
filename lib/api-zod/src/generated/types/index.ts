@@ -6,6 +6,20 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './agentSession';
+export * from './agentSessionContext';
+export * from './agentSessionCurrentStep';
+export * from './agentSessionEventsItem';
+export * from './agentSessionInput';
+export * from './agentSessionPlanItem';
+export * from './agentSessionPlanItemStatus';
+export * from './agentSessionProposal';
+export * from './agentSessionStatus';
+export * from './agentSessionToolResultsItem';
+export * from './agentSessionToolResultsItemStatus';
+export * from './agentToolDefinition';
+export * from './agentToolDefinitionPermission';
+export * from './agentToolDefinitionSchema';
 export * from './aiChatInput';
 export * from './aiChatInputRepositoryContext';
 export * from './aiChatMessage';
