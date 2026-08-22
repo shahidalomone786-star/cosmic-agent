@@ -20,6 +20,89 @@ export interface AiModel {
   recommended: boolean;
 }
 
+export type ResourceStatusAiStatus = typeof ResourceStatusAiStatus[keyof typeof ResourceStatusAiStatus];
+
+
+export const ResourceStatusAiStatus = {
+  healthy: 'healthy',
+  limited: 'limited',
+  unavailable: 'unavailable',
+} as const;
+
+export type ResourceStatusAiKeysItemStatus = typeof ResourceStatusAiKeysItemStatus[keyof typeof ResourceStatusAiKeysItemStatus];
+
+
+export const ResourceStatusAiKeysItemStatus = {
+  healthy: 'healthy',
+  cooldown: 'cooldown',
+  unavailable: 'unavailable',
+} as const;
+
+export type ResourceStatusAiKeysItem = {
+  id: string;
+  status: ResourceStatusAiKeysItemStatus;
+  /** @nullable */
+  cooldownUntil?: number | null;
+  rateLimitCount: number;
+};
+
+export type ResourceStatusAi = {
+  provider: string;
+  status: ResourceStatusAiStatus;
+  configuredKeyCount: number;
+  availableKeyCount: number;
+  keys: ResourceStatusAiKeysItem[];
+};
+
+export type ResourceStatusGithubApi = typeof ResourceStatusGithubApi[keyof typeof ResourceStatusGithubApi];
+
+
+export const ResourceStatusGithubApi = {
+  healthy: 'healthy',
+  low: 'low',
+  exhausted: 'exhausted',
+  unknown: 'unknown',
+} as const;
+
+export type ResourceStatusGithubCacheStatus = typeof ResourceStatusGithubCacheStatus[keyof typeof ResourceStatusGithubCacheStatus];
+
+
+export const ResourceStatusGithubCacheStatus = {
+  warm: 'warm',
+  cold: 'cold',
+} as const;
+
+export type ResourceStatusGithubCache = {
+  status: ResourceStatusGithubCacheStatus;
+  hits: number;
+  misses: number;
+};
+
+export type ResourceStatusGithub = {
+  api: ResourceStatusGithubApi;
+  message: string;
+  /** @nullable */
+  remaining: number | null;
+  /** @nullable */
+  limit: number | null;
+  /** @nullable */
+  resetAt: number | null;
+  cache: ResourceStatusGithubCache;
+};
+
+export type ResourceStatusContext = {
+  filesIncluded: number;
+  approximateChars: number;
+  chunked: boolean;
+  lastWarnings: string[];
+};
+
+export interface ResourceStatus {
+  ai: ResourceStatusAi;
+  github: ResourceStatusGithub;
+  context: ResourceStatusContext;
+}
+
 export type AiChatMessageRole = typeof AiChatMessageRole[keyof typeof AiChatMessageRole];
 
 
@@ -71,6 +154,9 @@ export type RepositoryContextUsedSourcesItem = {
 export interface RepositoryContextUsed {
   paths: string[];
   sources: RepositoryContextUsedSourcesItem[];
+  warnings?: string[];
+  approximateChars?: number;
+  chunked?: boolean;
 }
 
 export interface AiChatResponse {

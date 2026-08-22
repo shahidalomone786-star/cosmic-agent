@@ -3,6 +3,7 @@ import {
   SendAiMessageBody,
   SendAiMessageResponse,
   ListAiModelsResponse,
+  GetAiResourcesResponse,
 } from "@workspace/api-zod";
 import { providerManager } from "../ai/provider-manager";
 import { GroqProviderError } from "../ai/groq-provider";
@@ -11,12 +12,33 @@ import { CreateChangeProposalBody, CreateChangeProposalResponse } from "@workspa
 import { createChangeProposal, ProposalError, type ChangeProposal } from "../ai/change-proposal";
 import { commitProposal, executeProposal, getCommitReview, getPushReview, pushProposal, registerProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
 import { GitHubWriteProviderError } from "../repository/github-write-provider";
+import { groqKeyManager } from "../ai/groq-key-manager";
+import { getGitHubResourceStatus } from "../repository/github-resource-manager";
+import { getContextResourceStatus, RETRY_CONTEXT_CHARS } from "../repository/context-manager";
 
 const router: IRouter = Router();
 
 router.get("/ai/models", (_req, res) => {
   const provider = providerManager.getProvider();
   res.json(ListAiModelsResponse.parse(provider.getModels()));
+});
+
+router.get("/ai/resources", (_req, res) => {
+  const provider = providerManager.getProvider();
+  const health = provider.healthCheck();
+  const keyStatus = groqKeyManager.getStatus();
+  const github = getGitHubResourceStatus();
+  res.json(GetAiResourcesResponse.parse({
+    ai: {
+      provider: "groq",
+      status: health.available ? "healthy" : keyStatus.configured > 0 ? "limited" : "unavailable",
+      configuredKeyCount: keyStatus.configured,
+      availableKeyCount: keyStatus.available,
+      keys: keyStatus.keys.map(({ id, status, cooldownUntil, rateLimitCount }) => ({ id, status, cooldownUntil, rateLimitCount })),
+    },
+    github,
+    context: getContextResourceStatus(),
+  }));
 });
 
 router.post("/ai/change-proposal", async (req, res) => {
@@ -97,8 +119,15 @@ router.post("/ai/chat", async (req, res) => {
 
   try {
     const provider = providerManager.getProvider();
-    const prepared = await withRepositoryContext(parsed.data);
-    const result = await provider.chat(prepared);
+    let prepared = await withRepositoryContext(parsed.data);
+    let result;
+    try {
+      result = await provider.chat(prepared);
+    } catch (error) {
+      if (!(error instanceof GroqProviderError) || error.code !== "context_limit" || !parsed.data.repositoryContext) throw error;
+      prepared = await withRepositoryContext(parsed.data, RETRY_CONTEXT_CHARS);
+      result = await provider.chat(prepared);
+    }
     res.json(SendAiMessageResponse.parse({ ...result, repositoryContext: prepared.repositoryContextUsed }));
   } catch (error) {
     sendProviderError(res, error);
@@ -120,10 +149,18 @@ router.post("/ai/chat/stream", async (req, res) => {
 
   try {
     const provider = providerManager.getProvider();
-    const prepared = await withRepositoryContext(parsed.data);
-    const result = await provider.stream(prepared, (token) => {
+    let prepared = await withRepositoryContext(parsed.data);
+    let result;
+    const emitToken = (token: string) => {
       res.write(`data: ${JSON.stringify({ token })}\n\n`);
-    });
+    };
+    try {
+      result = await provider.stream(prepared, emitToken);
+    } catch (error) {
+      if (!(error instanceof GroqProviderError) || error.code !== "context_limit" || !parsed.data.repositoryContext) throw error;
+      prepared = await withRepositoryContext(parsed.data, RETRY_CONTEXT_CHARS);
+      result = await provider.stream(prepared, emitToken);
+    }
     res.write(`data: ${JSON.stringify({ done: true, response: { ...result, repositoryContext: prepared.repositoryContextUsed } })}\n\n`);
     res.write("data: [DONE]\n\n");
   } catch (error) {
@@ -154,23 +191,32 @@ type PreparedAiRequest = {
   messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   temperature?: number | null;
   repositoryContext?: { repository: RepositoryRef; paths: string[] };
-  repositoryContextUsed?: { paths: string[]; sources: Array<{ path: string; startLine?: number; endLine?: number }> };
+  repositoryContextUsed?: {
+    paths: string[];
+    sources: Array<{ path: string; startLine?: number; endLine?: number }>;
+    warnings?: string[];
+    approximateChars?: number;
+    chunked?: boolean;
+  };
 };
 
-async function withRepositoryContext(request: PreparedAiRequest): Promise<PreparedAiRequest> {
+async function withRepositoryContext(request: PreparedAiRequest, contextBudget?: number): Promise<PreparedAiRequest> {
   if (!request.repositoryContext) return request;
   const question = [...request.messages].reverse().find((message) => message.role === "user")?.content ?? "";
-  const context = await retrieveRepositoryContext(request.repositoryContext.repository, request.repositoryContext.paths, question).catch((): RepositoryContextResult => ({
+  const context = await retrieveRepositoryContext(request.repositoryContext.repository, request.repositoryContext.paths, question, contextBudget).catch((): RepositoryContextResult => ({
     text: [
       "Repository evidence is currently unavailable because the read-only source service could not retrieve the repository.",
       "Do not infer or invent framework, package manager, entry point, authentication, database, or architecture details.",
       "Tell the user that repository evidence is unavailable and ask them to retry later.",
     ].join("\n"),
     sources: [],
+    warnings: ["Repository evidence is unavailable; no source context was sent."],
+    approximateChars: 0,
+    chunked: false,
   }));
   return {
     ...request,
-    repositoryContextUsed: { paths: context.sources.map((source) => source.path), sources: context.sources },
+    repositoryContextUsed: { paths: context.sources.map((source) => source.path), sources: context.sources, warnings: context.warnings, approximateChars: context.approximateChars, chunked: context.chunked },
     messages: [...request.messages, { role: "system", content: `Repository: ${request.repositoryContext.repository.owner}/${request.repositoryContext.repository.name}\nBranch: ${request.repositoryContext.repository.branch}\nRelevant read-only source context:\n${context.text}` }],
   };
 }

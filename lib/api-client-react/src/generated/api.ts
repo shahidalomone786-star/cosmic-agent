@@ -43,7 +43,8 @@ import type {
   RepositoryRef,
   RepositorySearchInput,
   RepositorySearchResult,
-  RepositoryTreeInput
+  RepositoryTreeInput,
+  ResourceStatus
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -217,6 +218,84 @@ export function useListAiModels<TData = Awaited<ReturnType<typeof listAiModels>>
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getListAiModelsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetAiResourcesUrl = () => {
+
+
+
+
+  return `/api/ai/resources`
+}
+
+/**
+ * Returns operational metadata only. Secrets, credentials, and filesystem paths are never returned.
+ * @summary Get safe AI, GitHub, and context resource status
+ */
+export const getAiResources = async ( options?: Parameters<typeof customFetch>[1]): Promise<ResourceStatus> => {
+
+  return customFetch<ResourceStatus>(getGetAiResourcesUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetAiResourcesQueryKey = () => {
+    return [
+    `/api/ai/resources`
+    ] as const;
+    }
+
+
+export const getGetAiResourcesQueryOptions = <TData = Awaited<ReturnType<typeof getAiResources>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAiResources>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAiResourcesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAiResources>>> = ({ signal }) => getAiResources({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAiResources>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetAiResourcesQueryResult = NonNullable<Awaited<ReturnType<typeof getAiResources>>>
+export type GetAiResourcesQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get safe AI, GitHub, and context resource status
+ */
+
+export function useGetAiResources<TData = Awaited<ReturnType<typeof getAiResources>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAiResources>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetAiResourcesQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

@@ -41,6 +41,19 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/AiModel"
+  /ai/resources:
+    get:
+      operationId: getAiResources
+      tags: [ai]
+      summary: Get safe AI, GitHub, and context resource status
+      description: Returns operational metadata only. Secrets, credentials, and filesystem paths are never returned.
+      responses:
+        "200":
+          description: Resource status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceStatus"
   /ai/chat:
     post:
       operationId: sendAiMessage
@@ -400,6 +413,52 @@ components:
         - contextWindow
         - enabled
         - recommended
+    ResourceStatus:
+      type: object
+      properties:
+        ai:
+          type: object
+          properties:
+            provider: { type: string }
+            status: { type: string, enum: [healthy, limited, unavailable] }
+            configuredKeyCount: { type: number }
+            availableKeyCount: { type: number }
+            keys:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string, enum: [healthy, cooldown, unavailable] }
+                  cooldownUntil: { type: [number, "null"] }
+                  rateLimitCount: { type: number }
+                required: [id, status, rateLimitCount]
+          required: [provider, status, configuredKeyCount, availableKeyCount, keys]
+        github:
+          type: object
+          properties:
+            api: { type: string, enum: [healthy, low, exhausted, unknown] }
+            message: { type: string }
+            remaining: { type: [number, "null"] }
+            limit: { type: [number, "null"] }
+            resetAt: { type: [number, "null"] }
+            cache:
+              type: object
+              properties:
+                status: { type: string, enum: [warm, cold] }
+                hits: { type: number }
+                misses: { type: number }
+              required: [status, hits, misses]
+          required: [api, message, remaining, limit, resetAt, cache]
+        context:
+          type: object
+          properties:
+            filesIncluded: { type: number }
+            approximateChars: { type: number }
+            chunked: { type: boolean }
+            lastWarnings: { type: array, items: { type: string } }
+          required: [filesIncluded, approximateChars, chunked, lastWarnings]
+      required: [ai, github, context]
     AiChatMessage:
       type: object
       properties:
@@ -607,6 +666,11 @@ components:
               startLine: { type: number }
               endLine: { type: number }
             required: [path]
+        warnings:
+          type: array
+          items: { type: string }
+        approximateChars: { type: number }
+        chunked: { type: boolean }
       required: [paths, sources]
     RepositoryConnectInput:
       type: object

@@ -5,9 +5,9 @@ import type {
   AiProvider,
   ProviderHealth,
 } from "./ai-provider";
+import { groqKeyManager, type GroqKeyManager } from "./groq-key-manager";
 
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
-const MAX_ATTEMPTS = 5;
 const REQUEST_TIMEOUT_MS = 45_000;
 
 type GroqChoice = {
@@ -23,9 +23,10 @@ type GroqResponse = {
 
 export class GroqProvider implements AiProvider {
   readonly id = "groq" as const;
-  private nextKeyIndex = 0;
-
-  constructor(private readonly models: AiModel[]) {}
+  constructor(
+    private readonly models: AiModel[],
+    private readonly keyManager: GroqKeyManager = groqKeyManager,
+  ) {}
 
   getModels(): AiModel[] {
     return this.models.map((model) => ({
@@ -35,14 +36,16 @@ export class GroqProvider implements AiProvider {
   }
 
   healthCheck(): ProviderHealth {
-    const keyCount = this.getKeys().length;
+    const status = this.keyManager.getStatus();
     return {
-      available: keyCount > 0,
-      configured: keyCount > 0,
+      available: status.available > 0,
+      configured: status.configured > 0,
       message:
-        keyCount > 0
-          ? "Groq is configured server-side."
-          : "No Groq provider keys are configured.",
+        status.configured === 0
+          ? "No Groq provider keys are configured."
+          : status.available > 0
+            ? "Groq is configured server-side."
+            : "All configured Groq keys are temporarily unavailable.",
     };
   }
 
@@ -64,28 +67,46 @@ export class GroqProvider implements AiProvider {
     stream: boolean,
     onToken?: (token: string) => void,
   ): Promise<GroqResponse> {
-    const keys = this.getKeys();
-    if (keys.length === 0) {
+    const configured = this.keyManager.getStatus().configured;
+    if (configured === 0) {
       throw new GroqProviderError(
         "not_configured",
         "The AI provider is not configured yet.",
       );
     }
 
-    const attempts = Math.min(keys.length, MAX_ATTEMPTS);
+    const attempts = Math.min(configured, 5);
     let lastError: GroqProviderError | undefined;
+    let emitted = false;
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const key = this.takeNextKey(keys);
+      const lease = this.keyManager.acquire();
+      if (!lease) break;
       try {
-        return await this.request(key, request, stream, onToken);
+        const result = await this.request(lease.secret, request, stream, (token) => {
+          emitted = true;
+          onToken?.(token);
+        });
+        const content = result.choices?.[0]?.message?.content ?? "";
+        if (!content.trim()) {
+          throw new GroqProviderError(
+            "incomplete_response",
+            "The AI provider returned an incomplete response.",
+            true,
+          );
+        }
+        this.keyManager.markSuccess(lease.id);
+        return result;
       } catch (error) {
         lastError =
           error instanceof GroqProviderError
             ? error
             : new GroqProviderError("temporary_failure", "Provider request failed.");
 
-        if (!lastError.retryable) {
+        if (lastError.code === "rate_limited") this.keyManager.markRateLimited(lease.id);
+        else if (lastError.code === "invalid_configuration") this.keyManager.markFailure(lease.id, true);
+        else if (lastError.retryable) this.keyManager.markFailure(lease.id);
+        if (!lastError.retryable || (stream && emitted)) {
           throw lastError;
         }
       }
@@ -204,6 +225,16 @@ export class GroqProvider implements AiProvider {
     if (response.status === 429) {
       return new GroqProviderError("rate_limited", "The AI provider is rate limited.", true);
     }
+    if (
+      response.status === 400 &&
+      /(context|token|prompt).*(limit|length|too large)|maximum context/i.test(detail)
+    ) {
+      return new GroqProviderError(
+        "context_limit",
+        "The request exceeded the model context limit.",
+        true,
+      );
+    }
     if (response.status >= 500) {
       return new GroqProviderError("temporary_failure", "The AI provider is temporarily unavailable.", true);
     }
@@ -211,18 +242,6 @@ export class GroqProvider implements AiProvider {
       "provider_error",
       detail ? `The AI provider rejected the request: ${detail}` : "The AI provider rejected the request.",
     );
-  }
-
-  private getKeys(): string[] {
-    return [1, 2, 3, 4, 5]
-      .map((index) => process.env[`GROQ_API_KEY_${index}`]?.trim())
-      .filter((key): key is string => Boolean(key));
-  }
-
-  private takeNextKey(keys: string[]): string {
-    const key = keys[this.nextKeyIndex % keys.length];
-    this.nextKeyIndex = (this.nextKeyIndex + 1) % keys.length;
-    return key;
   }
 
   private toResponse(result: GroqResponse): AiChatResponse {
@@ -240,6 +259,8 @@ export type GroqProviderErrorCode =
   | "invalid_configuration"
   | "rate_limited"
   | "timeout"
+  | "context_limit"
+  | "incomplete_response"
   | "model_unavailable"
   | "temporary_failure"
   | "provider_error";

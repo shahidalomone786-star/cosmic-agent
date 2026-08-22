@@ -1,4 +1,6 @@
 import { logger } from "../lib/logger";
+import { recordCacheHit, recordCacheMiss, recordGitHubResponse, getGitHubResourceStatus } from "./github-resource-manager";
+import { chunkContext, getContextResourceStatus, MAX_CONTEXT_CHARS, recordContextStatus } from "./context-manager";
 
 export type RepositoryRef = {
   id: string;
@@ -69,6 +71,9 @@ const INDEX_TTL_MS = 10 * 60 * 1000;
 const REPOSITORY_CACHE = new Map<string, { expiresAt: number; tree: GitHubTreeEntry[]; overview?: RepositoryOverview }>();
 const FILE_CACHE = new Map<string, { expiresAt: number; file: FileResult }>();
 const BRANCH_SHA_CACHE = new Map<string, { expiresAt: number; sha: string }>();
+const SEARCH_CACHE = new Map<string, { expiresAt: number; results: Array<{ path: string; line: number; context: string }> }>();
+const METADATA_CACHE = new Map<string, { expiresAt: number; repo: { id: number; html_url: string; default_branch: string; full_name: string } }>();
+const DIRECTORY_CACHE = new Map<string, { expiresAt: number; entries: TreeEntry[] }>();
 
 export class RepositoryError extends Error {
   constructor(
@@ -122,6 +127,7 @@ async function githubFetch<T>(path: string, notFoundMessage: string): Promise<T>
     if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
     const response = await fetch(`${GITHUB_API}${path}`, { headers });
     const responseBody = await response.json().catch(() => null) as { message?: string } | null;
+      recordGitHubResponse(response.headers, response.status, responseBody?.message);
     const rateRemaining = response.headers.get("x-ratelimit-remaining");
     if (response.status === 401) throw new RepositoryError("permission_denied", "GitHub authorization was rejected. Public repositories do not require a token.");
     if (response.status === 403 || response.status === 429) {
@@ -141,10 +147,18 @@ async function githubFetch<T>(path: string, notFoundMessage: string): Promise<T>
 
 export async function connectRepository(url: string, branch?: string): Promise<RepositoryRef> {
   const { owner, name } = parseGitHubUrl(url);
-  const repo = await githubFetch<{ id: number; html_url: string; default_branch: string; full_name: string }>(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
-    "Repository not found on GitHub.",
-  ).catch((error: unknown) => {
+  const metadataKey = `${owner}/${name}`;
+  const cachedMetadata = METADATA_CACHE.get(metadataKey);
+  const repo = cachedMetadata && cachedMetadata.expiresAt > Date.now()
+    ? (recordCacheHit(), cachedMetadata.repo)
+    : await githubFetch<{ id: number; html_url: string; default_branch: string; full_name: string }>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      "Repository not found on GitHub.",
+    ).then((value) => {
+      recordCacheMiss();
+      METADATA_CACHE.set(metadataKey, { expiresAt: Date.now() + INDEX_TTL_MS, repo: value });
+      return value;
+    }).catch((error: unknown) => {
     if (error instanceof RepositoryError && error.code === "file_not_found") {
       throw new RepositoryError("repository_not_found", "Repository not found on GitHub.");
     }
@@ -158,18 +172,28 @@ export async function connectRepository(url: string, branch?: string): Promise<R
 
 export async function listTree(repository: RepositoryRef, path = ""): Promise<TreeEntry[]> {
   if (BLOCKED.test(path) || SECRET_FILE.test(path)) return [];
+  const cacheKey = repositoryCacheKey(repository, path);
+  const cached = DIRECTORY_CACHE.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    recordCacheHit();
+    return cached.entries;
+  }
+  recordCacheMiss();
   const ref = encodeURIComponent(repository.branch);
   const encodedPath = path ? `/${path.split("/").map(encodeURIComponent).join("/")}` : "";
   await resolveBranchSha(repository.owner, repository.name, repository.branch);
   const data = await githubFetch<Array<{ path: string; name: string; type: string; size?: number }>>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/contents${encodedPath}?ref=${ref}`, path ? "Directory not found on the selected branch." : "Repository tree not found on the selected branch.");
-  return data.filter((entry) => !BLOCKED.test(entry.path) && !SECRET_FILE.test(entry.path)).map((entry) => ({ path: entry.path, name: entry.name, type: entry.type === "dir" ? ("directory" as const) : ("file" as const), size: entry.size, language: languageFor(entry.name) })).sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "directory" ? -1 : 1);
+  const entries = data.filter((entry) => !BLOCKED.test(entry.path) && !SECRET_FILE.test(entry.path)).map((entry) => ({ path: entry.path, name: entry.name, type: entry.type === "dir" ? ("directory" as const) : ("file" as const), size: entry.size, language: languageFor(entry.name) })).sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "directory" ? -1 : 1);
+  DIRECTORY_CACHE.set(cacheKey, { expiresAt: Date.now() + INDEX_TTL_MS, entries });
+  return entries;
 }
 
 export async function readRepositoryFile(repository: RepositoryRef, path: string): Promise<FileResult> {
   if (BLOCKED.test(path) || SECRET_FILE.test(path)) throw new RepositoryError("permission_denied", "This file is protected from repository context.");
   const cacheKey = repositoryCacheKey(repository, path);
   const cached = FILE_CACHE.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.file;
+  if (cached && cached.expiresAt > Date.now()) { recordCacheHit(); return cached.file; }
+  recordCacheMiss();
   await resolveBranchSha(repository.owner, repository.name, repository.branch);
   const data = await githubFetch<{ content?: string; encoding?: string; size?: number; type?: string }>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(repository.branch)}`, "File not found on the selected branch.");
   if (data.type !== "file") throw new RepositoryError("file_not_found", "File not found on the selected branch.");
@@ -184,6 +208,10 @@ export async function readRepositoryFile(repository: RepositoryRef, path: string
 export async function searchRepository(repository: RepositoryRef, query: string): Promise<Array<{ path: string; line: number; context: string }>> {
   const safeQuery = query.trim();
   if (!safeQuery) return [];
+  const searchKey = `${repositoryCacheKey(repository)}?${safeQuery.toLowerCase()}`;
+  const cachedSearch = SEARCH_CACHE.get(searchKey);
+  if (cachedSearch && cachedSearch.expiresAt > Date.now()) { recordCacheHit(); return cachedSearch.results; }
+  recordCacheMiss();
   const candidates = (await getRepositoryTree(repository)).filter((entry) => entry.type === "blob" && !BLOCKED.test(entry.path) && !SECRET_FILE.test(entry.path)).slice(0, 500);
   const results: Array<{ path: string; line: number; context: string }> = [];
   for (const entry of candidates) {
@@ -195,13 +223,15 @@ export async function searchRepository(repository: RepositoryRef, query: string)
       lines.forEach((line, index) => { if (results.length < 40 && line.toLowerCase().includes(safeQuery.toLowerCase())) results.push({ path: entry.path, line: index + 1, context: line.trim().slice(0, 180) }); });
     } catch { /* Skip binary, blocked, and oversized files during broad search. */ }
   }
+  SEARCH_CACHE.set(searchKey, { expiresAt: Date.now() + INDEX_TTL_MS, results });
   return results;
 }
 
 export async function getRepositoryOverview(repository: RepositoryRef): Promise<RepositoryOverview> {
   const cacheKey = repositoryCacheKey(repository);
   const cached = REPOSITORY_CACHE.get(cacheKey);
-  if (cached?.overview && cached.expiresAt > Date.now()) return cached.overview;
+  if (cached?.overview && cached.expiresAt > Date.now()) { recordCacheHit(); return cached.overview; }
+  recordCacheMiss();
 
   const tree = await getRepositoryTree(repository);
   const files = tree
@@ -247,13 +277,29 @@ export async function getRepositoryOverview(repository: RepositoryRef): Promise<
 }
 
 type ContextSource = { path: string; startLine?: number; endLine?: number };
-export type RepositoryContextResult = { text: string; sources: ContextSource[] };
+export type RepositoryContextResult = {
+  text: string;
+  sources: ContextSource[];
+  warnings: string[];
+  approximateChars: number;
+  chunked: boolean;
+};
 
-export async function retrieveRepositoryContext(repository: RepositoryRef, paths: string[], question: string): Promise<RepositoryContextResult> {
+export async function retrieveRepositoryContext(
+  repository: RepositoryRef,
+  paths: string[],
+  question: string,
+  contextBudget = MAX_CONTEXT_CHARS,
+): Promise<RepositoryContextResult> {
   const overview = await getRepositoryOverview(repository);
-  const explicit = resolveExplicitPaths(paths, overview.files);
+  const requestedExplicit = [...new Set(paths.map((path) => path.replace(/^@/, "").trim()).filter(Boolean))];
+  const explicit = resolveExplicitPaths(requestedExplicit, overview.files);
+  const missingExplicit = requestedExplicit.filter((path) => !explicit.includes(path) && !overview.files.some((file) => file.path === path));
+  const omittedExplicit = requestedExplicit.filter((path) => !explicit.includes(path) && !missingExplicit.includes(path));
   const ranked = rankFiles(question, overview.files).filter((file) => !explicit.includes(file.path));
-  const selected = [...explicit.map((path) => overview.files.find((file) => file.path === path)).filter((file): file is IndexedFile => Boolean(file)), ...ranked].slice(0, 8);
+  const selected = [...explicit.map((path) => overview.files.find((file) => file.path === path)).filter((file): file is IndexedFile => Boolean(file)), ...ranked]
+    .filter((file, index, all) => all.findIndex((candidate) => candidate.path === file.path) === index)
+    .slice(0, 8);
   const snippets: string[] = [
     [
       "Repository intelligence summary (ground truth from the indexed tree):",
@@ -268,29 +314,45 @@ export async function retrieveRepositoryContext(repository: RepositoryRef, paths
       "Grounding rules: Use only this summary and the source excerpts below. Do not guess frameworks, authentication, routes, or data stores that are not evidenced here. If the excerpts do not establish a detail, say that it is not established. Cite exact file paths in backticks.",
     ].join("\n"),
   ];
+  const warnings = [
+    ...(missingExplicit.length ? [`Explicit files not found or not readable: ${missingExplicit.join(", ")}`] : []),
+    ...(omittedExplicit.length ? [`Explicit files omitted because the bounded context budget was reached: ${omittedExplicit.join(", ")}`] : []),
+  ];
+  if (warnings.length) snippets.push(`Context selection notice:\n${warnings.join("\n")}`);
   const sources: ContextSource[] = [];
   let totalChars = 0;
+  let chunked = false;
   for (const file of selected) {
-    if (totalChars >= 72_000) break;
+    if (totalChars >= contextBudget) {
+      if (explicit.includes(file.path) && !sources.some((source) => source.path === file.path)) {
+        warnings.push(`Explicit file could not fit in the bounded context budget: ${file.path}`);
+      }
+      continue;
+    }
     try {
       const result = await readRepositoryFile(repository, file.path);
-      const content = result.content.slice(0, Math.min(18_000, 72_000 - totalChars));
-      const lines = content.split("\n");
-      const range = relevantLineRange(lines, question);
-      snippets.push(`### ${result.path}${range ? ` (lines ${range.startLine}-${range.endLine})` : ""}\n${content}`);
-      sources.push({ path: result.path, ...range });
-      totalChars += content.length;
+      const content = result.content;
+      const selectedChunk = chunkContext(result.path, content, contextBudget - totalChars);
+      const range = relevantLineRange(content.split("\n"), question);
+      snippets.push(selectedChunk.text);
+      sources.push({ path: result.path, ...(range ?? { startLine: selectedChunk.startLine, endLine: selectedChunk.endLine }) });
+      totalChars += selectedChunk.text.length;
+      chunked ||= selectedChunk.chunked;
     } catch {
+      if (explicit.includes(file.path)) warnings.push(`Explicit file could not be retrieved: ${file.path}`);
       // Skip files that become unavailable or unsafe between indexing and retrieval.
     }
   }
-  return { text: snippets.join("\n\n"), sources };
+  const uniqueWarnings = [...new Set(warnings)];
+  recordContextStatus({ filesIncluded: sources.length, approximateChars: totalChars, chunked, lastWarnings: uniqueWarnings });
+  return { text: snippets.join("\n\n"), sources, warnings: uniqueWarnings, approximateChars: totalChars, chunked };
 }
 
 async function resolveBranchSha(owner: string, name: string, branch: string): Promise<string> {
   const cacheKey = `${owner}/${name}#${branch}`;
   const cached = BRANCH_SHA_CACHE.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.sha;
+  if (cached && cached.expiresAt > Date.now()) { recordCacheHit(); return cached.sha; }
+  recordCacheMiss();
   const encodedBranch = branch.split("/").map(encodeURIComponent).join("/");
   const ref = await githubFetch<{ object?: { sha?: string; type?: string } }>(
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/ref/heads/${encodedBranch}`,
@@ -302,6 +364,13 @@ async function resolveBranchSha(owner: string, name: string, branch: string): Pr
     throw error;
   });
   if (!ref.object?.sha) throw new RepositoryError("branch_not_found", "Branch not found on the repository.");
+  if (cached && cached.sha !== ref.object.sha) {
+    const prefix = `${owner}/${name}#${branch}`;
+    for (const key of [...REPOSITORY_CACHE.keys()]) if (key.startsWith(prefix)) REPOSITORY_CACHE.delete(key);
+    for (const key of [...FILE_CACHE.keys()]) if (key.startsWith(prefix)) FILE_CACHE.delete(key);
+    for (const key of [...SEARCH_CACHE.keys()]) if (key.startsWith(prefix)) SEARCH_CACHE.delete(key);
+    for (const key of [...DIRECTORY_CACHE.keys()]) if (key.startsWith(prefix)) DIRECTORY_CACHE.delete(key);
+  }
   BRANCH_SHA_CACHE.set(cacheKey, { expiresAt: Date.now() + INDEX_TTL_MS, sha: ref.object.sha });
   return ref.object.sha;
 }
@@ -309,7 +378,8 @@ async function resolveBranchSha(owner: string, name: string, branch: string): Pr
 async function getRepositoryTree(repository: RepositoryRef): Promise<GitHubTreeEntry[]> {
   const cacheKey = repositoryCacheKey(repository);
   const cached = REPOSITORY_CACHE.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.tree;
+  if (cached && cached.expiresAt > Date.now()) { recordCacheHit(); return cached.tree; }
+  recordCacheMiss();
   const branchSha = await resolveBranchSha(repository.owner, repository.name, repository.branch);
   const treeResponse = await githubFetch<{ tree?: GitHubTreeEntry[]; truncated?: boolean }>(`/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/git/trees/${encodeURIComponent(branchSha)}?recursive=1`, "Repository tree not found on the selected branch.");
   const tree = treeResponse.tree ?? [];
@@ -459,3 +529,5 @@ function languageFor(path: string): string {
   const extension = path.split(".").pop()?.toLowerCase();
   return ({ ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", css: "css", html: "html", json: "json", md: "markdown", yml: "yaml", yaml: "yaml", py: "python", go: "go", rs: "rust" } as Record<string, string>)[extension ?? ""] ?? "text";
 }
+
+export { getGitHubResourceStatus };

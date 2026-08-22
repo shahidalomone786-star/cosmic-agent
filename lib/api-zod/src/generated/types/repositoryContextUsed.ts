@@ -10,4 +10,7 @@ import type { RepositoryContextUsedSourcesItem } from './repositoryContextUsedSo
 export interface RepositoryContextUsed {
   paths: string[];
   sources: RepositoryContextUsedSourcesItem[];
+  warnings?: string[];
+  approximateChars?: number;
+  chunked?: boolean;
 }

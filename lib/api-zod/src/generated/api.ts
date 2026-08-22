@@ -34,6 +34,44 @@ export const ListAiModelsResponse = zod.array(ListAiModelsResponseItem)
 
 
 /**
+ * Returns operational metadata only. Secrets, credentials, and filesystem paths are never returned.
+ * @summary Get safe AI, GitHub, and context resource status
+ */
+export const GetAiResourcesResponse = zod.object({
+  "ai": zod.object({
+  "provider": zod.string(),
+  "status": zod.enum(['healthy', 'limited', 'unavailable']),
+  "configuredKeyCount": zod.number(),
+  "availableKeyCount": zod.number(),
+  "keys": zod.array(zod.object({
+  "id": zod.string(),
+  "status": zod.enum(['healthy', 'cooldown', 'unavailable']),
+  "cooldownUntil": zod.number().nullish(),
+  "rateLimitCount": zod.number()
+}))
+}),
+  "github": zod.object({
+  "api": zod.enum(['healthy', 'low', 'exhausted', 'unknown']),
+  "message": zod.string(),
+  "remaining": zod.number().nullable(),
+  "limit": zod.number().nullable(),
+  "resetAt": zod.number().nullable(),
+  "cache": zod.object({
+  "status": zod.enum(['warm', 'cold']),
+  "hits": zod.number(),
+  "misses": zod.number()
+})
+}),
+  "context": zod.object({
+  "filesIncluded": zod.number(),
+  "approximateChars": zod.number(),
+  "chunked": zod.boolean(),
+  "lastWarnings": zod.array(zod.string())
+})
+})
+
+
+/**
  * Sends a conversation to the server-side provider layer. Provider credentials are never accepted from or returned to the client.
  * @summary Send a message to an approved AI model
  */
@@ -75,7 +113,10 @@ export const SendAiMessageResponse = zod.object({
   "path": zod.string(),
   "startLine": zod.number().optional(),
   "endLine": zod.number().optional()
-}))
+})),
+  "warnings": zod.array(zod.string()).optional(),
+  "approximateChars": zod.number().optional(),
+  "chunked": zod.boolean().optional()
 }).optional()
 })
 
