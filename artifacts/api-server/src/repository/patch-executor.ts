@@ -119,20 +119,31 @@ export async function executeProposal(proposalId: string): Promise<ExecutionResu
   session.snapshots = snapshots;
   try {
     await writeAtomically(session.proposal.files, snapshots);
-    const validation = await runValidation();
-    if (!validation.ok) {
-      await restoreSnapshots(snapshots);
-      return { status: "validation_failed", proposalId, files: snapshots.map((item) => item.relativePath), addedLines: session.proposal.addedLines, removedLines: session.proposal.removedLines, typecheck: validation.typecheck, build: validation.build, message: validation.message, canUndo: false };
-    }
     session.applied = true;
-    session.validated = true;
+    session.validated = false;
     session.undoAvailable = true;
-    return { status: "applied", proposalId, files: snapshots.map((item) => item.relativePath), addedLines: session.proposal.addedLines, removedLines: session.proposal.removedLines, typecheck: validation.typecheck, build: validation.build, message: "Changes applied locally. Nothing has been committed or pushed.", canUndo: true };
+    return { status: "applied", proposalId, files: snapshots.map((item) => item.relativePath), addedLines: session.proposal.addedLines, removedLines: session.proposal.removedLines, typecheck: "not-verified", build: "not-verified", message: "Changes applied locally. Deterministic validation is required before commit review.", canUndo: true };
   } catch (error) {
     await restoreSnapshots(snapshots);
     if (error instanceof PatchExecutionError) throw error;
     throw new PatchExecutionError("validation_failed", "Changes were rolled back because validation could not complete.");
   }
+}
+
+export async function rejectAppliedProposal(proposalId: string): Promise<void> {
+  const session = sessions.get(proposalId);
+  if (!session?.applied) throw new PatchExecutionError("invalid_proposal", "There is no applied proposal to roll back.");
+  await restoreSnapshots(session.snapshots);
+  session.applied = false;
+  session.validated = false;
+  session.undoAvailable = false;
+}
+
+export function markProposalValidated(proposalId: string, validated: boolean): void {
+  const session = sessions.get(proposalId);
+  if (!session?.applied) throw new PatchExecutionError("invalid_proposal", "Only an applied proposal can be validated.");
+  session.validated = validated;
+  if (!validated) session.undoAvailable = false;
 }
 
 export async function getCommitReview(proposalId: string): Promise<CommitReviewResult> {

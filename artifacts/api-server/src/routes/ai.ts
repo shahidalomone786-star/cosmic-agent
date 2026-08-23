@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Response } from "express";
-import { AgentToolError, getAgentSession, getAgentToolDefinitions, requestAgentTool, recordAgentValidation, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
+import { AgentToolError, beginProposalValidation, getAgentSession, getAgentToolDefinitions, requestAgentTool, recordAgentValidation, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
 import {
   SendAiMessageBody,
   SendAiMessageResponse,
@@ -11,13 +11,14 @@ import { GroqProviderError } from "../ai/groq-provider";
 import { retrieveRepositoryContext, type RepositoryContextResult, type RepositoryRef } from "../repository/github-provider";
 import { CreateChangeProposalBody, CreateChangeProposalResponse } from "@workspace/api-zod";
 import { createChangeProposal, ProposalError, type ChangeProposal } from "../ai/change-proposal";
-import { commitProposal, executeProposal, getCommitReview, getPushReview, pushProposal, registerProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
+import { commitProposal, executeProposal, getCommitReview, getPushReview, markProposalValidated, pushProposal, registerProposal, rejectAppliedProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
 import { GitHubWriteProviderError } from "../repository/github-write-provider";
 import { groqKeyManager } from "../ai/groq-key-manager";
 import { executeWorkerTool, getWorkerContext, validateWorkerReport, workerReportSchema, workerToolRequestSchema } from "../ai/worker-runtime";
 import { getGitHubResourceStatus } from "../repository/github-resource-manager";
 import { getContextResourceStatus, RETRY_CONTEXT_CHARS } from "../repository/context-manager";
 import { reviewProposal, reviewRequestSchema } from "../ai/reviewer-runtime";
+import { validateAppliedProposal } from "../ai/validator-runtime";
 
 const router: IRouter = Router();
 
@@ -37,9 +38,9 @@ router.post("/ai/agent/sessions/:sessionId/tools", async (req, res) => {
 });
 
 router.get("/ai/agent/sessions/:sessionId/workers/:role/context", (req, res) => {
-  const role = req.params.role === "frontend" || req.params.role === "backend" ? req.params.role : undefined;
+  const role = req.params.role === "frontend" || req.params.role === "backend" || req.params.role === "validator" ? req.params.role : undefined;
   if (!role) {
-    res.status(400).json({ error: "Worker role must be frontend or backend.", code: "invalid_input" });
+    res.status(400).json({ error: "Worker role must be frontend, backend, or validator.", code: "invalid_input" });
     return;
   }
   const assignedFiles = Array.isArray(req.query.files)
@@ -55,8 +56,8 @@ router.get("/ai/agent/sessions/:sessionId/workers/:role/context", (req, res) => 
 
 router.post("/ai/agent/sessions/:sessionId/workers/:role/tools", async (req, res) => {
   const role = req.params.role;
-  if (role !== "frontend" && role !== "backend" && role !== "reviewer") {
-    res.status(400).json({ error: "Role must be frontend, backend, or reviewer.", code: "invalid_input" });
+  if (role !== "frontend" && role !== "backend" && role !== "reviewer" && role !== "validator") {
+    res.status(400).json({ error: "Role must be frontend, backend, reviewer, or validator.", code: "invalid_input" });
     return;
   }
   const parsed = workerToolRequestSchema.safeParse({ role, name: req.body?.name, input: req.body?.input });
@@ -178,8 +179,36 @@ router.post("/ai/change-proposal/execute", async (req, res) => {
   if (!proposalId) { res.status(400).json({ error: "Approval requires a valid proposal.", code: "invalid_proposal" }); return; }
   try {
     const result = await executeProposal(proposalId);
-    recordAgentValidation(proposalId, result);
-    res.json(result);
+    const session = beginProposalValidation(proposalId);
+    if (!session) {
+      await rejectAppliedProposal(proposalId);
+      res.status(422).json({ error: "The applied proposal could not be handed to the validator.", code: "validation_failed" });
+      return;
+    }
+    const validation = await validateAppliedProposal(providerManager.getProvider(), proposalId);
+    if (validation.status !== "pass") {
+      await rejectAppliedProposal(proposalId);
+      recordAgentValidation(proposalId, { status: "validation_failed", message: validation.summary });
+      res.json({
+        ...result,
+        status: "validation_failed",
+        typecheck: validation.checks.find((check) => check.name === "typecheck")?.status ?? "not-verified",
+        build: validation.checks.find((check) => check.name === "build")?.status ?? "not-verified",
+        message: `${validation.summary} Changes were rolled back; a new proposal and approval are required.`,
+        canUndo: false,
+        validation,
+      });
+      return;
+    }
+    markProposalValidated(proposalId, true);
+    recordAgentValidation(proposalId, { status: "applied", message: validation.summary });
+    res.json({
+      ...result,
+      typecheck: "pass",
+      build: "pass",
+      message: "Changes applied locally and passed deterministic validation. Nothing has been committed or pushed.",
+      validation,
+    });
   } catch (error) {
     sendExecutionError(res, error);
   }

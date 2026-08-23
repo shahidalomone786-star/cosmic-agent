@@ -14,6 +14,12 @@ import {
   type PushResult,
   type PushReview,
 } from "@workspace/api-client-react";
+type ValidationResult = {
+  status: "pass" | "fail" | "not-verified";
+  checks: Array<{ name: string; status: "pass" | "fail" | "not-verified"; details: string }>;
+  summary: string;
+  toolCallIds: string[];
+};
 
 function copyText(text: string) {
   void navigator.clipboard?.writeText(text);
@@ -139,8 +145,8 @@ export function ChangeProposalReview({
       })}
     </div>
     {busy && <div className="execution-progress" role="status"><strong>Applying Changes</strong><span className="done"><Check size={12} /> Validating proposal</span><span className="done"><Check size={12} /> Checking file versions</span><span className="active"><RotateCw size={12} /> Applying patch</span><span><ChevronRight size={12} /> Running typecheck</span><span><ChevronRight size={12} /> Running build</span></div>}
-    {execution?.status === "applied" && <div className="execution-success" role="status"><strong>Changes Applied Successfully</strong><span>{execution.message}</span><small>{execution.files.length} files modified · +{execution.addedLines} / −{execution.removedLines} lines · Typecheck: {execution.typecheck} · Build: {execution.build}</small></div>}
-    {execution?.status === "validation_failed" && <div className="execution-failure" role="alert"><strong>Changes Applied — Validation Failed</strong><span>{execution.message}</span><small>Affected files: {execution.files.join(", ")}</small></div>}
+    {execution?.status === "applied" && <div className="execution-success" role="status"><strong>Changes Applied Successfully</strong><span>{execution.message}</span><small>{execution.files.length} files modified · +{execution.addedLines} / −{execution.removedLines} lines · Typecheck: {execution.typecheck} · Build: {execution.build}</small>{(execution as ChangeExecutionResult & { validation?: ValidationResult }).validation && <ValidationSummary validation={(execution as ChangeExecutionResult & { validation: ValidationResult }).validation} />}</div>}
+    {execution?.status === "validation_failed" && <div className="execution-failure" role="alert"><strong>Validation failed safely</strong><span>{execution.message}</span><small>Affected files: {execution.files.join(", ")}</small>{(execution as ChangeExecutionResult & { validation?: ValidationResult }).validation && <ValidationSummary validation={(execution as ChangeExecutionResult & { validation: ValidationResult }).validation} />}</div>}
     {commitReview && <section className="github-review" aria-label="Commit review">
        <div className="github-review-heading"><div><div className="proposal-kicker"><ShieldCheck size={13} /> Commit review</div><h4>{phase === "provider_not_configured" ? "Provider Not Configured" : phase === "push_review" || phase === "no_push" || phase === "success" ? "Commit approved" : "Ready to Commit"}</h4><p>{commitReview.repository.owner}/{commitReview.repository.name} · {commitReview.branch}</p></div><span className="github-state">{phase === "commit_processing" ? "Commit Approval" : phase === "push_processing" ? "Push Approval" : phase === "success" ? "Push complete" : phase === "conflict" ? "Safely stopped" : phase === "provider_not_configured" ? "Writes disabled" : phase === "push_review" ? "Push review" : phase === "no_push" ? "Push declined" : "Awaiting approval"}</span></div>
       <div className="github-review-stats"><span><strong>{commitReview.files.length}</strong> files</span><span className="added-stat">+{commitReview.addedLines}</span><span className="removed-stat">−{commitReview.removedLines}</span><span>Validation: {commitReview.validation}</span></div>
@@ -161,4 +167,12 @@ export function ChangeProposalReview({
       {!execution && <><button className="proposal-regenerate" onClick={onRegenerate} disabled={busy}><RotateCw size={14} /> Regenerate</button><button className="proposal-approve" onClick={() => void approve()} disabled={busy}><Check size={14} /> {busy ? "Applying…" : "Approve changes"}</button></>}
     </div>
   </section>;
+}
+
+function ValidationSummary({ validation }: { validation: ValidationResult }) {
+  return <div className="validation-summary" data-testid="validation-summary">
+    <strong>Deterministic validation: {validation.status}</strong>
+    <span>{validation.summary}</span>
+    <div>{validation.checks.map((check) => <span className={`validation-check ${check.status}`} key={check.name}>{check.name}: {check.status}</span>)}</div>
+  </div>;
 }

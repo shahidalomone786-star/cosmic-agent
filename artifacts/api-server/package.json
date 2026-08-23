@@ -8,7 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "rm -rf test-dist && pnpm exec esbuild src/ai/evidence-verifier.ts --bundle --platform=node --format=esm --outfile=test-dist/evidence-verifier.mjs && node --test test/*.test.mjs"
+    "test": "rm -rf test-dist && pnpm exec esbuild src/ai/evidence-verifier.ts --bundle --platform=node --format=esm --outfile=test-dist/evidence-verifier.mjs && pnpm exec esbuild src/ai/validation-runtime.ts --bundle --platform=node --format=esm --outfile=test-dist/validation-runtime.mjs && node --test test/*.test.mjs"
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",

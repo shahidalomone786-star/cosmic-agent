@@ -12,4 +12,6 @@ export type WorkerContextRole = typeof WorkerContextRole[keyof typeof WorkerCont
 export const WorkerContextRole = {
   frontend: 'frontend',
   backend: 'backend',
+  reviewer: 'reviewer',
+  validator: 'validator',
 } as const;

@@ -885,6 +885,23 @@ components:
         sourceToolCallId: { type: string }
         summary: { type: string, minLength: 1 }
       required: [status, summary]
+    ValidationCheck:
+      type: object
+      properties:
+        name: { type: string }
+        status: { type: string, enum: [pass, fail, not-verified] }
+        sourceToolCallId: { type: string }
+        details: { type: string }
+      required: [name, status, details]
+    ValidationResult:
+      type: object
+      properties:
+        taskId: { type: string }
+        status: { type: string, enum: [pass, fail, not-verified] }
+        checks: { type: array, items: { $ref: "#/components/schemas/ValidationCheck" } }
+        toolCallIds: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [taskId, status, checks, toolCallIds, summary]
     WorkerFinding:
       type: object
       properties:
@@ -906,7 +923,7 @@ components:
     WorkerReport:
       type: object
       properties:
-        role: { type: string, enum: [frontend, backend] }
+        role: { type: string, enum: [frontend, backend, reviewer, validator] }
         taskId: { type: string }
         subtaskId: { type: string }
         filesInspected: { type: array, items: { type: string } }
@@ -981,7 +998,7 @@ components:
     WorkerContext:
       type: object
       properties:
-        role: { type: string, enum: [frontend, backend] }
+        role: { type: string, enum: [frontend, backend, reviewer, validator] }
         taskId: { type: string }
         task: { type: string }
         explicitFiles: { type: array, items: { type: string } }
@@ -1076,6 +1093,7 @@ components:
         build: { type: string }
         message: { type: string }
         canUndo: { type: boolean }
+        validation: { $ref: "#/components/schemas/ValidationResult" }
       required: [status, proposalId, files, addedLines, removedLines, typecheck, build, message, canUndo]
     ProposalActionResult:
       type: object

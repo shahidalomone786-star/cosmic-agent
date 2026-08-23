@@ -7,7 +7,7 @@ import {
 } from "./agent-runtime";
 import type { ToolCallTrace } from "./manager-brain";
 
-export const workerRoleSchema = z.enum(["frontend", "backend", "reviewer"]);
+export const workerRoleSchema = z.enum(["frontend", "backend", "reviewer", "validator"]);
 export type WorkerRole = z.infer<typeof workerRoleSchema>;
 
 export const WORKER_CONTRACTS = {
@@ -22,6 +22,10 @@ export const WORKER_CONTRACTS = {
   reviewer: {
     specialties: ["requirements coverage", "scope review", "dependency verification", "conflict resolution", "security review", "evidence grounding"],
     tools: ["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck"],
+  },
+  validator: {
+    specialties: ["deterministic typecheck", "deterministic build", "execution result inspection", "validation evidence"],
+    tools: ["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck", "run_build", "inspect_validation_result"],
   },
 } as const;
 

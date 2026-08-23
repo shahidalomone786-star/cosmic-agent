@@ -4,3 +4,4 @@
 - [Optional drawer layout](optional-drawer-layout.md) — New side panels must be hidden or fixed-positioned when closed so they cannot become accidental flex columns.
 - [Manager plan compatibility](manager-plan-compatibility.md) — Keep the legacy runtime progress plan separate from the canonical orchestration plan to preserve existing UI/runtime behavior.
 - [Server-grounded tool execution](server-grounded-tool-execution.md) — Tool permissions and execution traces belong to the runtime boundary; external manager requests cannot invoke proposal/apply tools.
+- [Canonical validator boundary](canonical-validator-boundary.md) — Only validator-owned completed typecheck/build traces can establish pass or fail.

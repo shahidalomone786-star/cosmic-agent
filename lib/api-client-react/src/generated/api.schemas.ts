@@ -527,6 +527,39 @@ export interface ValidationClaim {
   summary: string;
 }
 
+export type ValidationCheckStatus = typeof ValidationCheckStatus[keyof typeof ValidationCheckStatus];
+
+
+export const ValidationCheckStatus = {
+  pass: 'pass',
+  fail: 'fail',
+  'not-verified': 'not-verified',
+} as const;
+
+export interface ValidationCheck {
+  name: string;
+  status: ValidationCheckStatus;
+  sourceToolCallId?: string;
+  details: string;
+}
+
+export type ValidationResultStatus = typeof ValidationResultStatus[keyof typeof ValidationResultStatus];
+
+
+export const ValidationResultStatus = {
+  pass: 'pass',
+  fail: 'fail',
+  'not-verified': 'not-verified',
+} as const;
+
+export interface ValidationResult {
+  taskId: string;
+  status: ValidationResultStatus;
+  checks: ValidationCheck[];
+  toolCallIds: string[];
+  summary: string;
+}
+
 export interface WorkerFinding {
   title: string;
   description: string;
@@ -558,6 +591,8 @@ export type WorkerReportRole = typeof WorkerReportRole[keyof typeof WorkerReport
 export const WorkerReportRole = {
   frontend: 'frontend',
   backend: 'backend',
+  reviewer: 'reviewer',
+  validator: 'validator',
 } as const;
 
 export type WorkerReportStatus = typeof WorkerReportStatus[keyof typeof WorkerReportStatus];
@@ -722,6 +757,8 @@ export type WorkerContextRole = typeof WorkerContextRole[keyof typeof WorkerCont
 export const WorkerContextRole = {
   frontend: 'frontend',
   backend: 'backend',
+  reviewer: 'reviewer',
+  validator: 'validator',
 } as const;
 
 export interface WorkerContext {
@@ -815,6 +852,7 @@ export interface ChangeExecutionResult {
   build: string;
   message: string;
   canUndo: boolean;
+  validation?: ValidationResult;
 }
 
 export type ProposalActionResultStatus = typeof ProposalActionResultStatus[keyof typeof ProposalActionResultStatus];

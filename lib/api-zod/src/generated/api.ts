@@ -535,7 +535,7 @@ export const submitWorkerReportBodyConflictsItemPartiesMax = 3;
 
 
 export const SubmitWorkerReportBody = zod.object({
-  "role": zod.enum(['frontend', 'backend']),
+  "role": zod.enum(['frontend', 'backend', 'reviewer', 'validator']),
   "taskId": zod.string(),
   "subtaskId": zod.string(),
   "filesInspected": zod.array(zod.string()),
@@ -587,7 +587,7 @@ export const submitWorkerReportResponseReportConflictsItemPartiesMax = 3;
 
 export const SubmitWorkerReportResponse = zod.object({
   "report": zod.object({
-  "role": zod.enum(['frontend', 'backend']),
+  "role": zod.enum(['frontend', 'backend', 'reviewer', 'validator']),
   "taskId": zod.string(),
   "subtaskId": zod.string(),
   "filesInspected": zod.array(zod.string()),
@@ -684,7 +684,7 @@ export const ReviewAgentProposalBody = zod.object({
   "resolution": zod.string().optional()
 })).max(reviewAgentProposalBodyConflictsMax).optional(),
   "workerReports": zod.array(zod.object({
-  "role": zod.enum(['frontend', 'backend']),
+  "role": zod.enum(['frontend', 'backend', 'reviewer', 'validator']),
   "taskId": zod.string(),
   "subtaskId": zod.string(),
   "filesInspected": zod.array(zod.string()),
@@ -845,7 +845,19 @@ export const ExecuteChangeProposalResponse = zod.object({
   "typecheck": zod.string(),
   "build": zod.string(),
   "message": zod.string(),
-  "canUndo": zod.boolean()
+  "canUndo": zod.boolean(),
+  "validation": zod.object({
+  "taskId": zod.string(),
+  "status": zod.enum(['pass', 'fail', 'not-verified']),
+  "checks": zod.array(zod.object({
+  "name": zod.string(),
+  "status": zod.enum(['pass', 'fail', 'not-verified']),
+  "sourceToolCallId": zod.string().optional(),
+  "details": zod.string()
+})),
+  "toolCallIds": zod.array(zod.string()),
+  "summary": zod.string()
+}).optional()
 })
 
 

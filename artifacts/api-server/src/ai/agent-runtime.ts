@@ -8,6 +8,7 @@ import { initializeManager, MAX_TOOL_CALLS, type AgentContextMemory, type AgentP
 import { GroqProviderError } from "./groq-provider";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { ValidationResult } from "./validation-runtime";
 
 export const MAX_AGENT_ITERATIONS = Math.max(1, Math.min(Number(process.env.COSMIC_MAX_AGENT_ITERATIONS ?? 6), 12));
 export const MAX_SESSION_COUNT = 100;
@@ -88,6 +89,8 @@ export type AgentSession = {
   recovery?: { code: string; message: string; newProposalRequired: boolean };
   proposal?: { proposalId: string; files: string[]; risk: string; summary: string };
   proposalData?: ChangeProposal;
+  appliedProposalId?: string;
+  validation?: ValidationResult;
   events: AgentEvent[];
   createdAt: string;
   updatedAt: string;
@@ -111,6 +114,7 @@ export type AgentToolDefinition = {
 const managerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status"]);
 const proposalTools = new Set(["create_proposal"]);
 const workerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck"]);
+const validatorTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck", "run_build", "inspect_validation_result"]);
 const execFileAsync = promisify(execFile);
 
 const sessions = new Map<string, AgentSession>();
@@ -183,8 +187,8 @@ const toolDefinitions: readonly AgentToolDefinition[] = [
   { name: "analyze_repository", permission: "read", schema: { repository: "RepositoryRef" }, outputLimit: 8_000, timeoutMs: 20_000 },
   { name: "create_proposal", permission: "proposal", schema: { repository: "RepositoryRef", paths: "string[]", request: "string" }, outputLimit: 16_000, timeoutMs: 45_000 },
   { name: "apply_approved_patch", permission: "approval_required", schema: { proposalId: "string" }, outputLimit: 4_000, timeoutMs: 60_000 },
-  { name: "run_typecheck", permission: "approval_required", schema: { proposalId: "string" }, outputLimit: 4_000, timeoutMs: 60_000 },
-  { name: "run_build", permission: "approval_required", schema: { proposalId: "string" }, outputLimit: 4_000, timeoutMs: 60_000 },
+  { name: "run_typecheck", permission: "approval_required", schema: { proposalId: "string", scope: "workspace|frontend|backend" }, outputLimit: 4_000, timeoutMs: 60_000 },
+  { name: "run_build", permission: "approval_required", schema: { proposalId: "string", scope: "workspace|frontend|backend" }, outputLimit: 4_000, timeoutMs: 60_000 },
   { name: "inspect_validation_result", permission: "read", schema: { proposalId: "string" }, outputLimit: 4_000, timeoutMs: 5_000 },
   { name: "repository_status", permission: "read", schema: { repository: "RepositoryRef" }, outputLimit: 2_000, timeoutMs: 5_000 },
 ];
@@ -242,12 +246,20 @@ export async function executeAgentTool(
     finishTrace("denied", "permission_denied");
     throw new AgentToolError("permission_denied", `The ${role} worker is not permitted to request ${name}.`);
   }
+  if (role === "validator" && !validatorTools.has(name)) {
+    finishTrace("denied", "permission_denied");
+    throw new AgentToolError("permission_denied", `The validator role is not permitted to request ${name}.`);
+  }
   const normalizedInput = JSON.stringify(input);
   if (session.toolResults.some((result) => result.tool === name && JSON.stringify(result.input) === normalizedInput)) {
     finishTrace("denied", "bounded");
     throw new AgentToolError("bounded", `${name} was already completed with the same input during this session.`);
   }
-  if (definition.permission === "approval_required" && name !== "run_typecheck") {
+  if (
+    definition.permission === "approval_required" &&
+    !(name === "run_typecheck" && role !== "validator") &&
+    !(role === "validator" && session.appliedProposalId === input.proposalId)
+  ) {
     finishTrace("denied", "approval_required");
     addEvent(session, "approval_requested", "Approval gate held", `${name} cannot run until the matching human approval flow is completed.`);
     throw new AgentToolError("approval_required", `${name} requires explicit human approval.`);
@@ -273,7 +285,7 @@ export async function executeAgentTool(
       const typecheckResult = { scope, status: "pass" as const, summary: "The bounded typecheck completed successfully.", output };
       session.toolResults.push({ tool: name, status: "complete", summary: typecheckResult.summary, input: { scope }, output: { scope, status: typecheckResult.status } });
       session.memory.completedTools = [...new Set([...session.memory.completedTools, name])].slice(-30);
-      finishTrace("completed", undefined, summarizeOutput(typecheckResult));
+      finishTrace("completed", undefined, summarizeOutput(typecheckResult), typecheckResult);
       return typecheckResult;
     } catch (error) {
       const output = error && typeof error === "object" && "stdout" in error
@@ -281,13 +293,44 @@ export async function executeAgentTool(
         : error instanceof Error ? error.message : "Typecheck failed.";
       const failure = { scope, status: "fail" as const, summary: "The bounded typecheck completed with failures.", output };
       session.toolResults.push({ tool: name, status: "failed", summary: failure.summary, input: { scope }, output: { scope, status: failure.status } });
-      finishTrace("failed", "typecheck_failed", summarizeOutput(failure));
+      finishTrace("failed", "typecheck_failed", summarizeOutput(failure), failure);
+      throw new AgentToolError("invalid_input", `${failure.summary} ${output}`.slice(0, 1_000));
+    }
+  }
+  if (name === "run_build") {
+    const scope = input.scope === undefined ? "workspace" : input.scope;
+    if (scope !== "workspace" && scope !== "frontend" && scope !== "backend") {
+      finishTrace("failed", "invalid_input");
+      throw new AgentToolError("invalid_input", "run_build scope must be workspace, frontend, or backend.");
+    }
+    trace.status = "running";
+    try {
+      const command = scope === "workspace"
+        ? ["run", "build"]
+        : ["--filter", `@workspace/${scope === "frontend" ? "cosmic-agent" : "api-server"}`, "run", "build"];
+      const result = await withTimeout(execFileAsync("pnpm", command, {
+        cwd: process.cwd(),
+        maxBuffer: 32_000,
+        env: { ...process.env, CI: "1" },
+      }), definition.timeoutMs, "The bounded build timed out.");
+      const output = `${result.stdout}\n${result.stderr}`.trim().slice(0, definition.outputLimit);
+      const buildResult = { scope, status: "pass" as const, summary: "The bounded build completed successfully.", output };
+      session.toolResults.push({ tool: name, status: "complete", summary: buildResult.summary, input: { scope }, output: { scope, status: buildResult.status } });
+      finishTrace("completed", undefined, summarizeOutput(buildResult), buildResult);
+      return buildResult;
+    } catch (error) {
+      const output = error && typeof error === "object" && "stdout" in error
+        ? `${String((error as { stdout?: unknown }).stdout ?? "")}\n${String((error as { stderr?: unknown }).stderr ?? "")}`.trim().slice(0, definition.outputLimit)
+        : error instanceof Error ? error.message : "Build failed.";
+      const failure = { scope, status: "fail" as const, summary: "The bounded build completed with failures.", output };
+      session.toolResults.push({ tool: name, status: "failed", summary: failure.summary, input: { scope }, output: { scope, status: failure.status } });
+      finishTrace("failed", "build_failed", summarizeOutput(failure), failure);
       throw new AgentToolError("invalid_input", `${failure.summary} ${output}`.slice(0, 1_000));
     }
   }
   if (name === "inspect_validation_result") {
-    const result = { proposalId: typeof input.proposalId === "string" ? input.proposalId : "", status: "approval_required", summary: "Validation results are only available after an approved patch execution." };
-    finishTrace("completed", undefined, summarizeOutput(result));
+    const result = session.validation ?? { proposalId: typeof input.proposalId === "string" ? input.proposalId : "", status: "not-verified" as const, summary: "Validation has not completed." };
+    finishTrace("completed", undefined, summarizeOutput(result), result);
     return result;
   }
   if (!repository) {
@@ -483,6 +526,22 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
 
 export function getAgentSession(id: string): AgentSession | undefined {
   return sessions.get(id);
+}
+
+export function getAgentSessionForProposal(proposalId: string): AgentSession | undefined {
+  const sessionId = proposalSessions.get(proposalId);
+  return sessionId ? sessions.get(sessionId) : undefined;
+}
+
+export function beginProposalValidation(proposalId: string): AgentSession | undefined {
+  const session = getAgentSessionForProposal(proposalId);
+  if (session) {
+    session.appliedProposalId = proposalId;
+    session.currentState = "VALIDATING";
+    session.currentStep = "verify";
+    addEvent(session, "validation_started", "Validator started", "Only server-executed typecheck and build results can establish validation.");
+  }
+  return session;
 }
 
 export function getOffloadedResult(sessionId: string, resultId: string): { preview: string; content: string } | undefined {

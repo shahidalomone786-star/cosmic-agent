@@ -12,4 +12,6 @@ export type WorkerReportRole = typeof WorkerReportRole[keyof typeof WorkerReport
 export const WorkerReportRole = {
   frontend: 'frontend',
   backend: 'backend',
+  reviewer: 'reviewer',
+  validator: 'validator',
 } as const;

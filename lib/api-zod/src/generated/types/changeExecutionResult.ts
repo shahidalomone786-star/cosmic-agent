@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ChangeExecutionResultStatus } from './changeExecutionResultStatus';
+import type { ValidationResult } from './validationResult';
 
 export interface ChangeExecutionResult {
   status: ChangeExecutionResultStatus;
@@ -17,4 +18,5 @@ export interface ChangeExecutionResult {
   build: string;
   message: string;
   canUndo: boolean;
+  validation?: ValidationResult;
 }
