@@ -50,6 +50,8 @@ import type {
   RepositoryTreeInput,
   RequestAgentTool200,
   ResourceStatus,
+  ReviewRequest,
+  ReviewResult,
   SubmitWorkerReport200,
   WorkerReport,
   WorkerToolRequest
@@ -833,6 +835,78 @@ export const useSubmitWorkerReport = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getSubmitWorkerReportMutationOptions(options));
+    }
+
+export const getReviewAgentProposalUrl = () => {
+
+
+
+
+  return `/api/ai/agent/reviews`
+}
+
+/**
+ * Independent reviewer analysis. Evidence is accepted only when its source tool call is a completed server trace for the current task. Approval remains a separate human decision.
+ * @summary Review a proposal using server-verified evidence
+ */
+export const reviewAgentProposal = async (reviewRequest: ReviewRequest, options?: Parameters<typeof customFetch>[1]): Promise<ReviewResult> => {
+
+  return customFetch<ReviewResult>(getReviewAgentProposalUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(reviewRequest)
+  }
+);}
+
+
+
+
+
+export const getReviewAgentProposalMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reviewAgentProposal>>, TError,{data: BodyType<ReviewRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof reviewAgentProposal>>, TError,{data: BodyType<ReviewRequest>}, TContext> => {
+
+const mutationKey = ['reviewAgentProposal'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof reviewAgentProposal>>, {data: BodyType<ReviewRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  reviewAgentProposal(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReviewAgentProposalMutationResult = NonNullable<Awaited<ReturnType<typeof reviewAgentProposal>>>
+    export type ReviewAgentProposalMutationBody = BodyType<ReviewRequest>
+    export type ReviewAgentProposalMutationError = ErrorType<void>
+
+    /**
+ * @summary Review a proposal using server-verified evidence
+ */
+export const useReviewAgentProposal = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reviewAgentProposal>>, TError,{data: BodyType<ReviewRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof reviewAgentProposal>>,
+        TError,
+        {data: BodyType<ReviewRequest>},
+        TContext
+      > => {
+      return useMutation(getReviewAgentProposalMutationOptions(options));
     }
 
 export const getStreamAiMessageUrl = () => {

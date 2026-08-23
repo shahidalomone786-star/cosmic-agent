@@ -212,11 +212,17 @@ export async function executeAgentTool(
     inputSummary: summarizeInput(input),
   };
   session.toolTraces.push(trace);
-  const finishTrace = (status: ToolCallTrace["status"], errorCode?: string, outputSummary?: string) => {
+  const finishTrace = (status: ToolCallTrace["status"], errorCode?: string, outputSummary?: string, evidence?: unknown) => {
     trace.status = status;
     trace.completedAt = now();
     trace.errorCode = errorCode;
     trace.outputSummary = outputSummary;
+    if (status === "completed" && evidence !== undefined) {
+      trace.evidence = {
+        summary: outputSummary ?? summarizeOutput(evidence),
+        content: boundedEvidence(evidence),
+      };
+    }
     session.updatedAt = now();
   };
   if (session.toolTraces.filter((item) => item.status === "requested" || item.status === "running" || item.status === "completed" || item.status === "failed" || item.status === "timeout").length > MAX_TOOL_CALLS) {
@@ -232,7 +238,7 @@ export async function executeAgentTool(
     finishTrace("denied", "permission_denied");
     throw new AgentToolError("permission_denied", `The ${role} role is not permitted to request ${name}.`);
   }
-  if ((role === "frontend" || role === "backend") && !workerTools.has(name)) {
+  if ((role === "frontend" || role === "backend" || role === "reviewer") && !workerTools.has(name)) {
     finishTrace("denied", "permission_denied");
     throw new AgentToolError("permission_denied", `The ${role} worker is not permitted to request ${name}.`);
   }
@@ -327,7 +333,7 @@ export async function executeAgentTool(
   session.toolResults.push({ tool: name, status: "complete", summary: "Completed with bounded output.", input: Object.fromEntries(Object.entries(input).filter(([key]) => key !== "repository" && key !== "content").slice(0, 8).map(([key, value]) => [key, typeof value === "string" || typeof value === "number" ? value : JSON.stringify(value).slice(0, 240)])), output: compacted && typeof compacted === "object" ? { keys: Object.keys(compacted as object).slice(0, 12) } : undefined });
   session.memory.completedTools = [...new Set([...session.memory.completedTools, name])].slice(-30);
   if (session.toolResults.length > 30) session.toolResults = session.toolResults.slice(-30);
-  finishTrace("completed", undefined, summarizeOutput(compacted));
+   finishTrace("completed", undefined, summarizeOutput(compacted), compacted);
   return compacted;
 }
 
@@ -522,6 +528,12 @@ function summarizeOutput(value: unknown): string {
   if (Array.isArray(value)) return `${value.length} items`;
   if (value && typeof value === "object") return `object keys: ${Object.keys(value).slice(0, 12).join(", ")}`;
   return typeof value;
+}
+
+function boundedEvidence(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/("(?:secret|token|key|password|credential)[^"]*"\s*:\s*)"[^"]*"/gi, '$1"[redacted]"')
+    .slice(0, 12_000);
 }
 
 export function recordAgentValidation(proposalId: string, result: { status: string; message: string }): AgentSession | undefined {

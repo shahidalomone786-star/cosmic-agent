@@ -7,7 +7,7 @@ import {
 } from "./agent-runtime";
 import type { ToolCallTrace } from "./manager-brain";
 
-export const workerRoleSchema = z.enum(["frontend", "backend"]);
+export const workerRoleSchema = z.enum(["frontend", "backend", "reviewer"]);
 export type WorkerRole = z.infer<typeof workerRoleSchema>;
 
 export const WORKER_CONTRACTS = {
@@ -19,7 +19,28 @@ export const WORKER_CONTRACTS = {
     specialties: ["API routes", "server logic", "data flow", "server validation", "database interactions", "authentication integration", "provider integrations", "error handling"],
     tools: ["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck"],
   },
+  reviewer: {
+    specialties: ["requirements coverage", "scope review", "dependency verification", "conflict resolution", "security review", "evidence grounding"],
+    tools: ["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck"],
+  },
 } as const;
+
+export const dependencyFindingSchema = z.object({
+  description: z.string().min(1).max(2_000),
+  fromRole: workerRoleSchema,
+  toRole: workerRoleSchema,
+  status: z.enum(["reported", "verified", "conflict"]).default("reported"),
+  evidenceToolCallId: z.string().uuid().optional(),
+});
+export type DependencyFinding = z.infer<typeof dependencyFindingSchema>;
+
+export const conflictFindingSchema = z.object({
+  claim: z.string().min(1).max(2_000),
+  parties: z.array(workerRoleSchema).min(2).max(3),
+  status: z.enum(["unresolved", "resolved"]).default("unresolved"),
+  resolution: z.string().max(2_000).optional(),
+});
+export type ConflictFinding = z.infer<typeof conflictFindingSchema>;
 
 export const validationClaimSchema = z.object({
   status: z.enum(["pass", "fail", "not-verified"]),
@@ -55,6 +76,8 @@ export const workerReportSchema = z.object({
   findings: z.array(workerFindingSchema).max(50),
   proposals: z.array(fileProposalSchema).max(10),
   dependencies: z.array(z.string().min(1)).max(30),
+  dependencyFindings: z.array(dependencyFindingSchema).max(30).default([]),
+  conflicts: z.array(conflictFindingSchema).max(20).default([]),
   validation: validationClaimSchema,
   toolCallIds: z.array(z.string().uuid()).max(50),
   tokensUsed: z.number().int().min(0).optional(),
@@ -115,6 +138,11 @@ export function validateWorkerReport(reportInput: unknown): { report: WorkerRepo
   const session = getAgentSession(report.taskId);
   if (!session) return { report, validation: forceNotVerified(report.validation, "The task session was not found.") };
 
+  const scopeViolation = report.proposals.find((proposal) => !isInAssignedScope(session, proposal.path));
+  if (scopeViolation) {
+    return { report, validation: forceNotVerified(report.validation, `Proposal path is outside the assigned scope: ${scopeViolation.path}`) };
+  }
+
   const trace = findValidationTrace(session, report);
   if (!trace) return { report, validation: forceNotVerified(report.validation, "No completed run_typecheck evidence belongs to this worker.") };
 
@@ -123,6 +151,12 @@ export function validateWorkerReport(reportInput: unknown): { report: WorkerRepo
     return { report, validation: forceNotVerified(report.validation, "The validation claim does not match the server execution trace.") };
   }
   return { report, validation: { ...report.validation, sourceToolCallId: trace.toolCallId, status: actual } };
+}
+
+export function isInAssignedScope(session: AgentSession, path: string): boolean {
+  const normalized = path.replace(/^@/, "").trim();
+  const explicit = session.contextMemory.explicitFiles;
+  return explicit.length === 0 || explicit.includes(normalized);
 }
 
 function findValidationTrace(session: AgentSession, report: WorkerReport): ToolCallTrace | undefined {

@@ -446,6 +446,11 @@ export const ToolCallTraceStatus = {
   timeout: 'timeout',
 } as const;
 
+export type ToolCallTraceEvidence = {
+  summary: string;
+  content: string;
+};
+
 export interface ToolCallTrace {
   toolCallId: string;
   taskId: string;
@@ -456,6 +461,7 @@ export interface ToolCallTrace {
   completedAt?: string;
   inputSummary: string;
   outputSummary?: string;
+  evidence?: ToolCallTraceEvidence;
   errorCode?: string;
 }
 
@@ -563,6 +569,69 @@ export const WorkerReportStatus = {
   failed: 'failed',
 } as const;
 
+export type DependencyFindingFromRole = typeof DependencyFindingFromRole[keyof typeof DependencyFindingFromRole];
+
+
+export const DependencyFindingFromRole = {
+  frontend: 'frontend',
+  backend: 'backend',
+  reviewer: 'reviewer',
+} as const;
+
+export type DependencyFindingToRole = typeof DependencyFindingToRole[keyof typeof DependencyFindingToRole];
+
+
+export const DependencyFindingToRole = {
+  frontend: 'frontend',
+  backend: 'backend',
+  reviewer: 'reviewer',
+} as const;
+
+export type DependencyFindingStatus = typeof DependencyFindingStatus[keyof typeof DependencyFindingStatus];
+
+
+export const DependencyFindingStatus = {
+  reported: 'reported',
+  verified: 'verified',
+  conflict: 'conflict',
+} as const;
+
+export interface DependencyFinding {
+  description: string;
+  fromRole: DependencyFindingFromRole;
+  toRole: DependencyFindingToRole;
+  status: DependencyFindingStatus;
+  evidenceToolCallId?: string;
+}
+
+export type ConflictFindingPartiesItem = typeof ConflictFindingPartiesItem[keyof typeof ConflictFindingPartiesItem];
+
+
+export const ConflictFindingPartiesItem = {
+  frontend: 'frontend',
+  backend: 'backend',
+  reviewer: 'reviewer',
+} as const;
+
+export type ConflictFindingStatus = typeof ConflictFindingStatus[keyof typeof ConflictFindingStatus];
+
+
+export const ConflictFindingStatus = {
+  unresolved: 'unresolved',
+  resolved: 'resolved',
+} as const;
+
+export interface ConflictFinding {
+  claim: string;
+  /**
+     * @minItems 2
+     * @maxItems 3
+     */
+  parties: ConflictFindingPartiesItem[];
+  status: ConflictFindingStatus;
+  resolution?: string;
+}
+
 export interface WorkerReport {
   role: WorkerReportRole;
   taskId: string;
@@ -572,10 +641,71 @@ export interface WorkerReport {
   findings: WorkerFinding[];
   proposals: FileProposal[];
   dependencies: string[];
+  dependencyFindings?: DependencyFinding[];
+  conflicts?: ConflictFinding[];
   validation: ValidationClaim;
   toolCallIds: string[];
   tokensUsed?: number;
   status: WorkerReportStatus;
+}
+
+export type EvidenceCheckResult = typeof EvidenceCheckResult[keyof typeof EvidenceCheckResult];
+
+
+export const EvidenceCheckResult = {
+  match: 'match',
+  mismatch: 'mismatch',
+  insufficient: 'insufficient',
+} as const;
+
+export interface EvidenceCheck {
+  claim: string;
+  evidence: string;
+  sourceToolCallId: string;
+  critical: boolean;
+  result?: EvidenceCheckResult;
+}
+
+export interface ReviewRequest {
+  taskId: string;
+  /** @maxItems 50 */
+  proposalFiles?: string[];
+  /** @maxItems 50 */
+  groundedFindings: EvidenceCheck[];
+  /** @maxItems 30 */
+  dependencies?: DependencyFinding[];
+  /** @maxItems 20 */
+  conflicts?: ConflictFinding[];
+  /** @maxItems 10 */
+  workerReports?: WorkerReport[];
+  notes?: string;
+}
+
+export type ReviewResultVerdict = typeof ReviewResultVerdict[keyof typeof ReviewResultVerdict];
+
+
+export const ReviewResultVerdict = {
+  approve: 'approve',
+  'request-changes': 'request-changes',
+  reject: 'reject',
+} as const;
+
+export type ReviewResultReviewerStatus = typeof ReviewResultReviewerStatus[keyof typeof ReviewResultReviewerStatus];
+
+
+export const ReviewResultReviewerStatus = {
+  completed: 'completed',
+  blocked: 'blocked',
+  failed: 'failed',
+} as const;
+
+export interface ReviewResult {
+  taskId: string;
+  verdict: ReviewResultVerdict;
+  groundedFindings: EvidenceCheck[];
+  freeTextNotes?: string;
+  toolCallIds: string[];
+  reviewerStatus: ReviewResultReviewerStatus;
 }
 
 export type WorkerToolRequestInput = { [key: string]: unknown };

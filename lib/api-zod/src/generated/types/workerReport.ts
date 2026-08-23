@@ -5,6 +5,8 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ConflictFinding } from './conflictFinding';
+import type { DependencyFinding } from './dependencyFinding';
 import type { FileProposal } from './fileProposal';
 import type { ValidationClaim } from './validationClaim';
 import type { WorkerFinding } from './workerFinding';
@@ -20,6 +22,8 @@ export interface WorkerReport {
   findings: WorkerFinding[];
   proposals: FileProposal[];
   dependencies: string[];
+  dependencyFindings?: DependencyFinding[];
+  conflicts?: ConflictFinding[];
   validation: ValidationClaim;
   toolCallIds: string[];
   tokensUsed?: number;

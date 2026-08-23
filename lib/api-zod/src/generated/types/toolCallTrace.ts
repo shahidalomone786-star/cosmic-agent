@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ToolCallTraceEvidence } from './toolCallTraceEvidence';
 import type { ToolCallTraceRole } from './toolCallTraceRole';
 import type { ToolCallTraceStatus } from './toolCallTraceStatus';
 
@@ -18,5 +19,6 @@ export interface ToolCallTrace {
   completedAt?: string;
   inputSummary: string;
   outputSummary?: string;
+  evidence?: ToolCallTraceEvidence;
   errorCode?: string;
 }

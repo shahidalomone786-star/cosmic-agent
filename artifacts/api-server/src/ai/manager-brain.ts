@@ -91,6 +91,10 @@ export interface ToolCallTrace {
   completedAt?: string;
   inputSummary: string;
   outputSummary?: string;
+  evidence?: {
+    summary: string;
+    content: string;
+  };
   errorCode?: string;
 }
 

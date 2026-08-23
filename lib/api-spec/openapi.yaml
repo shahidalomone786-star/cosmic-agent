@@ -216,6 +216,25 @@ paths:
                 required: [report, validation]
         "400":
           description: Invalid worker report
+  /ai/agent/reviews:
+    post:
+      operationId: reviewAgentProposal
+      tags: [agent]
+      summary: Review a proposal using server-verified evidence
+      description: Independent reviewer analysis. Evidence is accepted only when its source tool call is a completed server trace for the current task. Approval remains a separate human decision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewRequest" }
+      responses:
+        "200":
+          description: Structured reviewer result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewResult" }
+        "400":
+          description: Invalid review request
   /ai/chat/stream:
     post:
       operationId: streamAiMessage
@@ -851,6 +870,12 @@ components:
         completedAt: { type: string }
         inputSummary: { type: string }
         outputSummary: { type: string }
+        evidence:
+          type: object
+          properties:
+            summary: { type: string }
+            content: { type: string }
+          required: [summary, content]
         errorCode: { type: string }
       required: [toolCallId, taskId, role, tool, status, startedAt, inputSummary]
     ValidationClaim:
@@ -889,11 +914,64 @@ components:
         findings: { type: array, items: { $ref: "#/components/schemas/WorkerFinding" } }
         proposals: { type: array, items: { $ref: "#/components/schemas/FileProposal" } }
         dependencies: { type: array, items: { type: string } }
+        dependencyFindings:
+          type: array
+          items: { $ref: "#/components/schemas/DependencyFinding" }
+        conflicts:
+          type: array
+          items: { $ref: "#/components/schemas/ConflictFinding" }
         validation: { $ref: "#/components/schemas/ValidationClaim" }
         toolCallIds: { type: array, items: { type: string } }
         tokensUsed: { type: number }
         status: { type: string, enum: [completed, blocked, failed] }
       required: [role, taskId, subtaskId, filesInspected, relevantFiles, findings, proposals, dependencies, validation, toolCallIds, status]
+    DependencyFinding:
+      type: object
+      properties:
+        description: { type: string }
+        fromRole: { type: string, enum: [frontend, backend, reviewer] }
+        toRole: { type: string, enum: [frontend, backend, reviewer] }
+        status: { type: string, enum: [reported, verified, conflict] }
+        evidenceToolCallId: { type: string }
+      required: [description, fromRole, toRole, status]
+    ConflictFinding:
+      type: object
+      properties:
+        claim: { type: string }
+        parties: { type: array, minItems: 2, maxItems: 3, items: { type: string, enum: [frontend, backend, reviewer] } }
+        status: { type: string, enum: [unresolved, resolved] }
+        resolution: { type: string }
+      required: [claim, parties, status]
+    EvidenceCheck:
+      type: object
+      properties:
+        claim: { type: string }
+        evidence: { type: string }
+        sourceToolCallId: { type: string }
+        critical: { type: boolean }
+        result: { type: string, enum: [match, mismatch, insufficient] }
+      required: [claim, evidence, sourceToolCallId, critical]
+    ReviewRequest:
+      type: object
+      properties:
+        taskId: { type: string }
+        proposalFiles: { type: array, items: { type: string }, maxItems: 50 }
+        groundedFindings: { type: array, items: { $ref: "#/components/schemas/EvidenceCheck" }, maxItems: 50 }
+        dependencies: { type: array, items: { $ref: "#/components/schemas/DependencyFinding" }, maxItems: 30 }
+        conflicts: { type: array, items: { $ref: "#/components/schemas/ConflictFinding" }, maxItems: 20 }
+        workerReports: { type: array, items: { $ref: "#/components/schemas/WorkerReport" }, maxItems: 10 }
+        notes: { type: string }
+      required: [taskId, groundedFindings]
+    ReviewResult:
+      type: object
+      properties:
+        taskId: { type: string }
+        verdict: { type: string, enum: [approve, request-changes, reject] }
+        groundedFindings: { type: array, items: { $ref: "#/components/schemas/EvidenceCheck" } }
+        freeTextNotes: { type: string }
+        toolCallIds: { type: array, items: { type: string } }
+        reviewerStatus: { type: string, enum: [completed, blocked, failed] }
+      required: [taskId, verdict, groundedFindings, toolCallIds, reviewerStatus]
     WorkerToolRequest:
       type: object
       properties:

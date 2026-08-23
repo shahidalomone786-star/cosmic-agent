@@ -275,6 +275,10 @@ export const CreateAgentSessionResponse = zod.object({
   "completedAt": zod.string().optional(),
   "inputSummary": zod.string(),
   "outputSummary": zod.string().optional(),
+  "evidence": zod.object({
+  "summary": zod.string(),
+  "content": zod.string()
+}).optional(),
   "errorCode": zod.string().optional()
 })),
   "providerBudget": zod.object({
@@ -438,6 +442,10 @@ export const GetAgentSessionResponse = zod.object({
   "completedAt": zod.string().optional(),
   "inputSummary": zod.string(),
   "outputSummary": zod.string().optional(),
+  "evidence": zod.object({
+  "summary": zod.string(),
+  "content": zod.string()
+}).optional(),
   "errorCode": zod.string().optional()
 })),
   "providerBudget": zod.object({
@@ -520,6 +528,9 @@ export const RequestWorkerToolResponse = zod.unknown()
  * Worker reports are schema-validated and validation claims are checked against real server tool traces.
  * @summary Validate and accept a worker report
  */
+export const submitWorkerReportBodyConflictsItemPartiesMin = 2;
+export const submitWorkerReportBodyConflictsItemPartiesMax = 3;
+
 
 
 
@@ -544,6 +555,19 @@ export const SubmitWorkerReportBody = zod.object({
   "removedLines": zod.number()
 })),
   "dependencies": zod.array(zod.string()),
+  "dependencyFindings": zod.array(zod.object({
+  "description": zod.string(),
+  "fromRole": zod.enum(['frontend', 'backend', 'reviewer']),
+  "toRole": zod.enum(['frontend', 'backend', 'reviewer']),
+  "status": zod.enum(['reported', 'verified', 'conflict']),
+  "evidenceToolCallId": zod.string().optional()
+})).optional(),
+  "conflicts": zod.array(zod.object({
+  "claim": zod.string(),
+  "parties": zod.array(zod.enum(['frontend', 'backend', 'reviewer'])).min(submitWorkerReportBodyConflictsItemPartiesMin).max(submitWorkerReportBodyConflictsItemPartiesMax),
+  "status": zod.enum(['unresolved', 'resolved']),
+  "resolution": zod.string().optional()
+})).optional(),
   "validation": zod.object({
   "status": zod.enum(['pass', 'fail', 'not-verified']),
   "sourceToolCallId": zod.string().optional(),
@@ -553,6 +577,9 @@ export const SubmitWorkerReportBody = zod.object({
   "tokensUsed": zod.number().optional(),
   "status": zod.enum(['completed', 'blocked', 'failed'])
 })
+
+export const submitWorkerReportResponseReportConflictsItemPartiesMin = 2;
+export const submitWorkerReportResponseReportConflictsItemPartiesMax = 3;
 
 
 
@@ -580,6 +607,19 @@ export const SubmitWorkerReportResponse = zod.object({
   "removedLines": zod.number()
 })),
   "dependencies": zod.array(zod.string()),
+  "dependencyFindings": zod.array(zod.object({
+  "description": zod.string(),
+  "fromRole": zod.enum(['frontend', 'backend', 'reviewer']),
+  "toRole": zod.enum(['frontend', 'backend', 'reviewer']),
+  "status": zod.enum(['reported', 'verified', 'conflict']),
+  "evidenceToolCallId": zod.string().optional()
+})).optional(),
+  "conflicts": zod.array(zod.object({
+  "claim": zod.string(),
+  "parties": zod.array(zod.enum(['frontend', 'backend', 'reviewer'])).min(submitWorkerReportResponseReportConflictsItemPartiesMin).max(submitWorkerReportResponseReportConflictsItemPartiesMax),
+  "status": zod.enum(['unresolved', 'resolved']),
+  "resolution": zod.string().optional()
+})).optional(),
   "validation": zod.object({
   "status": zod.enum(['pass', 'fail', 'not-verified']),
   "sourceToolCallId": zod.string().optional(),
@@ -594,6 +634,114 @@ export const SubmitWorkerReportResponse = zod.object({
   "sourceToolCallId": zod.string().optional(),
   "summary": zod.string().min(1)
 })
+})
+
+
+/**
+ * Independent reviewer analysis. Evidence is accepted only when its source tool call is a completed server trace for the current task. Approval remains a separate human decision.
+ * @summary Review a proposal using server-verified evidence
+ */
+export const reviewAgentProposalBodyProposalFilesMax = 50;
+
+export const reviewAgentProposalBodyGroundedFindingsMax = 50;
+
+export const reviewAgentProposalBodyDependenciesMax = 30;
+
+export const reviewAgentProposalBodyConflictsItemPartiesMin = 2;
+export const reviewAgentProposalBodyConflictsItemPartiesMax = 3;
+
+export const reviewAgentProposalBodyConflictsMax = 20;
+
+export const reviewAgentProposalBodyWorkerReportsItemConflictsItemPartiesMin = 2;
+export const reviewAgentProposalBodyWorkerReportsItemConflictsItemPartiesMax = 3;
+
+
+export const reviewAgentProposalBodyWorkerReportsMax = 10;
+
+
+
+export const ReviewAgentProposalBody = zod.object({
+  "taskId": zod.string(),
+  "proposalFiles": zod.array(zod.string()).max(reviewAgentProposalBodyProposalFilesMax).optional(),
+  "groundedFindings": zod.array(zod.object({
+  "claim": zod.string(),
+  "evidence": zod.string(),
+  "sourceToolCallId": zod.string(),
+  "critical": zod.boolean(),
+  "result": zod.enum(['match', 'mismatch', 'insufficient']).optional()
+})).max(reviewAgentProposalBodyGroundedFindingsMax),
+  "dependencies": zod.array(zod.object({
+  "description": zod.string(),
+  "fromRole": zod.enum(['frontend', 'backend', 'reviewer']),
+  "toRole": zod.enum(['frontend', 'backend', 'reviewer']),
+  "status": zod.enum(['reported', 'verified', 'conflict']),
+  "evidenceToolCallId": zod.string().optional()
+})).max(reviewAgentProposalBodyDependenciesMax).optional(),
+  "conflicts": zod.array(zod.object({
+  "claim": zod.string(),
+  "parties": zod.array(zod.enum(['frontend', 'backend', 'reviewer'])).min(reviewAgentProposalBodyConflictsItemPartiesMin).max(reviewAgentProposalBodyConflictsItemPartiesMax),
+  "status": zod.enum(['unresolved', 'resolved']),
+  "resolution": zod.string().optional()
+})).max(reviewAgentProposalBodyConflictsMax).optional(),
+  "workerReports": zod.array(zod.object({
+  "role": zod.enum(['frontend', 'backend']),
+  "taskId": zod.string(),
+  "subtaskId": zod.string(),
+  "filesInspected": zod.array(zod.string()),
+  "relevantFiles": zod.array(zod.string()),
+  "findings": zod.array(zod.object({
+  "title": zod.string(),
+  "description": zod.string(),
+  "file": zod.string().optional(),
+  "evidenceToolCallId": zod.string().optional()
+})),
+  "proposals": zod.array(zod.object({
+  "path": zod.string(),
+  "diff": zod.string(),
+  "rationale": zod.string(),
+  "risk": zod.enum(['low', 'medium', 'high']),
+  "addedLines": zod.number(),
+  "removedLines": zod.number()
+})),
+  "dependencies": zod.array(zod.string()),
+  "dependencyFindings": zod.array(zod.object({
+  "description": zod.string(),
+  "fromRole": zod.enum(['frontend', 'backend', 'reviewer']),
+  "toRole": zod.enum(['frontend', 'backend', 'reviewer']),
+  "status": zod.enum(['reported', 'verified', 'conflict']),
+  "evidenceToolCallId": zod.string().optional()
+})).optional(),
+  "conflicts": zod.array(zod.object({
+  "claim": zod.string(),
+  "parties": zod.array(zod.enum(['frontend', 'backend', 'reviewer'])).min(reviewAgentProposalBodyWorkerReportsItemConflictsItemPartiesMin).max(reviewAgentProposalBodyWorkerReportsItemConflictsItemPartiesMax),
+  "status": zod.enum(['unresolved', 'resolved']),
+  "resolution": zod.string().optional()
+})).optional(),
+  "validation": zod.object({
+  "status": zod.enum(['pass', 'fail', 'not-verified']),
+  "sourceToolCallId": zod.string().optional(),
+  "summary": zod.string().min(1)
+}),
+  "toolCallIds": zod.array(zod.string()),
+  "tokensUsed": zod.number().optional(),
+  "status": zod.enum(['completed', 'blocked', 'failed'])
+})).max(reviewAgentProposalBodyWorkerReportsMax).optional(),
+  "notes": zod.string().optional()
+})
+
+export const ReviewAgentProposalResponse = zod.object({
+  "taskId": zod.string(),
+  "verdict": zod.enum(['approve', 'request-changes', 'reject']),
+  "groundedFindings": zod.array(zod.object({
+  "claim": zod.string(),
+  "evidence": zod.string(),
+  "sourceToolCallId": zod.string(),
+  "critical": zod.boolean(),
+  "result": zod.enum(['match', 'mismatch', 'insufficient']).optional()
+})),
+  "freeTextNotes": zod.string().optional(),
+  "toolCallIds": zod.array(zod.string()),
+  "reviewerStatus": zod.enum(['completed', 'blocked', 'failed'])
 })
 
 

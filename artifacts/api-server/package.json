@@ -7,7 +7,8 @@
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "rm -rf test-dist && pnpm exec esbuild src/ai/evidence-verifier.ts --bundle --platform=node --format=esm --outfile=test-dist/evidence-verifier.mjs && node --test test/*.test.mjs"
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",

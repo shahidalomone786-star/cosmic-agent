@@ -17,6 +17,7 @@ import { groqKeyManager } from "../ai/groq-key-manager";
 import { executeWorkerTool, getWorkerContext, validateWorkerReport, workerReportSchema, workerToolRequestSchema } from "../ai/worker-runtime";
 import { getGitHubResourceStatus } from "../repository/github-resource-manager";
 import { getContextResourceStatus, RETRY_CONTEXT_CHARS } from "../repository/context-manager";
+import { reviewProposal, reviewRequestSchema } from "../ai/reviewer-runtime";
 
 const router: IRouter = Router();
 
@@ -54,8 +55,8 @@ router.get("/ai/agent/sessions/:sessionId/workers/:role/context", (req, res) => 
 
 router.post("/ai/agent/sessions/:sessionId/workers/:role/tools", async (req, res) => {
   const role = req.params.role;
-  if (role !== "frontend" && role !== "backend") {
-    res.status(400).json({ error: "Worker role must be frontend or backend.", code: "invalid_input" });
+  if (role !== "frontend" && role !== "backend" && role !== "reviewer") {
+    res.status(400).json({ error: "Role must be frontend, backend, or reviewer.", code: "invalid_input" });
     return;
   }
   const parsed = workerToolRequestSchema.safeParse({ role, name: req.body?.name, input: req.body?.input });
@@ -76,6 +77,15 @@ router.post("/ai/agent/sessions/:sessionId/workers/:role/tools", async (req, res
     }
     sendProviderError(res, error);
   }
+});
+
+router.post("/ai/agent/reviews", (req, res) => {
+  const parsed = reviewRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Review request failed schema validation.", code: "invalid_review", issues: parsed.error.issues.slice(0, 8) });
+    return;
+  }
+  res.json(reviewProposal(parsed.data));
 });
 
 router.post("/ai/agent/worker-reports", (req, res) => {
