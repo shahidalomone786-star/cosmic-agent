@@ -86,6 +86,16 @@ export type AgentSession = {
     validationResults: string[];
     contextNotes: string[];
   };
+  workerState: {
+    assignedTasks: Record<string, string>;
+    assignedSubtasks: Record<string, string>;
+    relevantFiles: Record<string, string[]>;
+    completedToolIds: Record<string, string[]>;
+    findings: Record<string, string[]>;
+    dependencies: Record<string, string[]>;
+    validationResults: Record<string, string[]>;
+    retryCounts: Record<string, number>;
+  };
   recovery?: { code: string; message: string; newProposalRequired: boolean };
   proposal?: { proposalId: string; files: string[]; risk: string; summary: string };
   proposalData?: ChangeProposal;
@@ -119,6 +129,7 @@ const execFileAsync = promisify(execFile);
 
 const sessions = new Map<string, AgentSession>();
 const offloadedResults = new Map<string, { sessionId: string; preview: string; content: string }>();
+const readResultCache = new Map<string, { contextVersion: number; toolCallId: string; result: unknown }>();
 const proposalSessions = new Map<string, string>();
 let sessionSequence = 0;
 
@@ -250,6 +261,18 @@ export async function executeAgentTool(
     finishTrace("denied", "permission_denied");
     throw new AgentToolError("permission_denied", `The validator role is not permitted to request ${name}.`);
   }
+  const cacheKey = name === "read_file" || name === "file_context" || name === "repository_search" || name === "analyze_repository"
+    ? `${session.contextMemory.contextVersion}:${role}:${name}:${JSON.stringify(input)}`
+    : undefined;
+  const cached = cacheKey ? readResultCache.get(cacheKey) : undefined;
+  if (cached && cached.contextVersion === session.contextMemory.contextVersion) {
+    trace.status = "completed";
+    trace.completedAt = now();
+    trace.outputSummary = `Reused server trace ${cached.toolCallId}.`;
+    trace.evidence = { summary: trace.outputSummary, content: boundedEvidence(cached.result) };
+    session.updatedAt = now();
+    return cached.result;
+  }
   const normalizedInput = JSON.stringify(input);
   if (session.toolResults.some((result) => result.tool === name && JSON.stringify(result.input) === normalizedInput)) {
     finishTrace("denied", "bounded");
@@ -377,6 +400,7 @@ export async function executeAgentTool(
   session.memory.completedTools = [...new Set([...session.memory.completedTools, name])].slice(-30);
   if (session.toolResults.length > 30) session.toolResults = session.toolResults.slice(-30);
    finishTrace("completed", undefined, summarizeOutput(compacted), compacted);
+  if (cacheKey) readResultCache.set(cacheKey, { contextVersion: session.contextMemory.contextVersion, toolCallId: trace.toolCallId, result: compacted });
   return compacted;
 }
 
@@ -436,6 +460,16 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
     context: { filesIncluded: 0, approximateChars: 0, chunked: false, warnings: [] },
     toolResults: [],
     memory: { completedTools: [], validationResults: [], contextNotes: [] },
+    workerState: {
+      assignedTasks: {},
+      assignedSubtasks: {},
+      relevantFiles: {},
+      completedToolIds: {},
+      findings: {},
+      dependencies: {},
+      validationResults: {},
+      retryCounts: {},
+    },
     events: [],
     createdAt: now(),
     updatedAt: now(),
@@ -536,12 +570,19 @@ export function getAgentSessionForProposal(proposalId: string): AgentSession | u
 export function beginProposalValidation(proposalId: string): AgentSession | undefined {
   const session = getAgentSessionForProposal(proposalId);
   if (session) {
+    invalidateSessionContext(session, "approved proposal applied");
     session.appliedProposalId = proposalId;
     session.currentState = "VALIDATING";
     session.currentStep = "verify";
     addEvent(session, "validation_started", "Validator started", "Only server-executed typecheck and build results can establish validation.");
   }
   return session;
+}
+
+export function invalidateSessionContext(session: AgentSession, reason: string): void {
+  session.contextMemory.contextVersion += 1;
+  session.memory.contextNotes = [...session.memory.contextNotes, `Context invalidated: ${reason}`].slice(-10);
+  session.updatedAt = now();
 }
 
 export function getOffloadedResult(sessionId: string, resultId: string): { preview: string; content: string } | undefined {

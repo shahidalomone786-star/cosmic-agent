@@ -48,15 +48,21 @@ export function reviewProposal(input: ReviewRequest): ReviewResult {
   }
 
   const findings = input.groundedFindings.map((finding) => verifyEvidence(session, finding));
+  const reportChecks = input.workerReports.flatMap((report) => validateWorkerReportEvidence(session, report));
   const scopeViolation = input.proposalFiles.find((file) => !isInScope(session, file));
   const unresolvedConflict = input.conflicts.some((conflict) => conflict.status !== "resolved")
     || input.workerReports.some((report) => report.conflicts.some((conflict) => conflict.status !== "resolved"));
   const invalidDependency = input.dependencies.some((dependency) => dependency.status === "verified" && !hasCompletedTrace(session, dependency.evidenceToolCallId));
-  const criticalInsufficient = findings.some((finding) => finding.critical && finding.result === "insufficient");
-  const criticalMismatch = findings.some((finding) => finding.critical && finding.result === "mismatch");
+  const unrelatedChange = input.workerReports.some((report) =>
+    report.proposals.some((proposal) => input.proposalFiles.length > 0 && !input.proposalFiles.includes(proposal.path)),
+  );
+  const criticalInsufficient = findings.some((finding) => finding.critical && finding.result === "insufficient")
+    || reportChecks.some((check) => check === "insufficient");
+  const criticalMismatch = findings.some((finding) => finding.critical && finding.result === "mismatch")
+    || reportChecks.some((check) => check === "mismatch");
 
   let verdict: ReviewResult["verdict"] = "approve";
-  if (scopeViolation || unresolvedConflict || invalidDependency || criticalInsufficient) verdict = "request-changes";
+  if (scopeViolation || unresolvedConflict || invalidDependency || unrelatedChange || criticalInsufficient) verdict = "request-changes";
   if (criticalMismatch) verdict = "reject";
 
   const toolCallIds = [...new Set(findings.filter((finding) => finding.result !== "insufficient").map((finding) => finding.sourceToolCallId))];
@@ -70,9 +76,41 @@ export function reviewProposal(input: ReviewRequest): ReviewResult {
       scopeViolation ? `Proposal exceeds explicit file scope: ${scopeViolation}` : undefined,
       unresolvedConflict ? "Worker conflict remains unresolved and must be routed back to the manager." : undefined,
       invalidDependency ? "A dependency was marked verified without a completed server trace." : undefined,
+      unrelatedChange ? "A worker proposed a file outside the final proposal file set." : undefined,
+      reportChecks.length ? "One or more worker claims are not grounded in a completed trace for this task." : undefined,
     ].filter(Boolean).join(" ") || undefined,
     reviewerStatus: "completed",
   };
+}
+
+function validateWorkerReportEvidence(session: AgentSession, report: WorkerReport): Array<"insufficient" | "mismatch"> {
+  const problems: Array<"insufficient" | "mismatch"> = [];
+  if (report.taskId !== session.id || report.status === "failed") return ["insufficient"];
+  for (const toolCallId of report.toolCallIds) {
+    const trace = session.toolTraces.find((candidate) => candidate.toolCallId === toolCallId);
+    if (!trace || trace.taskId !== session.id || !["frontend", "backend"].includes(trace.role) || !trace.completedAt) problems.push("insufficient");
+  }
+  for (const finding of report.findings) {
+    if (!finding.evidenceToolCallId) {
+      problems.push("insufficient");
+      continue;
+    }
+    const trace = session.toolTraces.find((candidate) => candidate.toolCallId === finding.evidenceToolCallId);
+    const verified = verifyEvidenceForTrace(trace, session.id, {
+      claim: finding.title,
+      evidence: finding.description,
+      sourceToolCallId: finding.evidenceToolCallId,
+      critical: true,
+    }, report.role);
+    if (verified.result === "insufficient" || verified.result === "mismatch") problems.push(verified.result);
+  }
+  if (report.validation.sourceToolCallId) {
+    const trace = session.toolTraces.find((candidate) => candidate.toolCallId === report.validation.sourceToolCallId);
+    if (!trace || trace.taskId !== session.id || trace.role !== report.role || trace.tool !== "run_typecheck" || !trace.completedAt) problems.push("insufficient");
+  } else {
+    problems.push("insufficient");
+  }
+  return problems;
 }
 
 function verifyEvidence(session: AgentSession, finding: EvidenceCheck): EvidenceCheck {
