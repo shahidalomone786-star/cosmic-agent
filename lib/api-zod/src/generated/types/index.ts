@@ -6,6 +6,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './agentPlan';
+export * from './agentPlanComplexity';
+export * from './agentPlanStatus';
 export * from './agentSession';
 export * from './agentSessionContext';
 export * from './agentSessionCurrentStep';
@@ -20,6 +23,8 @@ export * from './agentSessionToolResultsItemStatus';
 export * from './agentToolDefinition';
 export * from './agentToolDefinitionPermission';
 export * from './agentToolDefinitionSchema';
+export * from './agentToolRequest';
+export * from './agentToolRequestInput';
 export * from './aiChatInput';
 export * from './aiChatInputRepositoryContext';
 export * from './aiChatMessage';
@@ -42,6 +47,10 @@ export * from './commitReviewStatus';
 export * from './commitReviewValidation';
 export * from './executeChangeProposalInput';
 export * from './healthStatus';
+export * from './managerDecision';
+export * from './planStep';
+export * from './planStepAssignedRole';
+export * from './planStepStatus';
 export * from './proposalActionInput';
 export * from './proposalActionResult';
 export * from './proposalActionResultStatus';
@@ -64,6 +73,7 @@ export * from './repositoryRef';
 export * from './repositorySearchInput';
 export * from './repositorySearchResult';
 export * from './repositoryTreeInput';
+export * from './requestAgentTool200';
 export * from './resourceStatus';
 export * from './resourceStatusAi';
 export * from './resourceStatusAiKeysItem';
@@ -74,3 +84,6 @@ export * from './resourceStatusGithub';
 export * from './resourceStatusGithubApi';
 export * from './resourceStatusGithubCache';
 export * from './resourceStatusGithubCacheStatus';
+export * from './taskClassification';
+export * from './taskClassificationCategory';
+export * from './taskDependency';

@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { AgentPlan } from './agentPlan';
 import type { AgentSessionContext } from './agentSessionContext';
 import type { AgentSessionCurrentStep } from './agentSessionCurrentStep';
 import type { AgentSessionEventsItem } from './agentSessionEventsItem';
@@ -12,7 +13,9 @@ import type { AgentSessionPlanItem } from './agentSessionPlanItem';
 import type { AgentSessionProposal } from './agentSessionProposal';
 import type { AgentSessionStatus } from './agentSessionStatus';
 import type { AgentSessionToolResultsItem } from './agentSessionToolResultsItem';
+import type { ManagerDecision } from './managerDecision';
 import type { RepositoryRef } from './repositoryRef';
+import type { TaskClassification } from './taskClassification';
 
 export interface AgentSession {
   id: string;
@@ -26,6 +29,10 @@ export interface AgentSession {
   selectedFiles: string[];
   activeModel: string;
   provider: string;
+  classification: TaskClassification;
+  managerPlan: AgentPlan;
+  managerDecision: ManagerDecision;
+  managerReplanCount: number;
   context: AgentSessionContext;
   toolResults: AgentSessionToolResultsItem[];
   proposal?: AgentSessionProposal;

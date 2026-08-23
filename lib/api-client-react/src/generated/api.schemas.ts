@@ -184,6 +184,14 @@ export interface AgentToolDefinition {
   schema: AgentToolDefinitionSchema;
 }
 
+export type AgentToolRequestInput = { [key: string]: unknown };
+
+export interface AgentToolRequest {
+  /** @minLength 1 */
+  name: string;
+  input?: AgentToolRequestInput;
+}
+
 export interface AgentSessionInput {
   /**
      * @minLength 1
@@ -273,6 +281,117 @@ export type AgentSessionEventsItem = {
   timestamp: string;
 };
 
+export type TaskClassificationCategory = typeof TaskClassificationCategory[keyof typeof TaskClassificationCategory];
+
+
+export const TaskClassificationCategory = {
+  SIMPLE: 'SIMPLE',
+  MODERATE: 'MODERATE',
+  COMPLEX: 'COMPLEX',
+  REVIEW_ONLY: 'REVIEW_ONLY',
+  CLARIFICATION_REQUIRED: 'CLARIFICATION_REQUIRED',
+} as const;
+
+export interface TaskClassification {
+  category: TaskClassificationCategory;
+  /**
+     * @minimum 0
+     * @maximum 1
+     */
+  confidence: number;
+  reason: string;
+  estimatedToolCalls: number;
+  estimatedModelCalls: number;
+}
+
+export type PlanStepStatus = typeof PlanStepStatus[keyof typeof PlanStepStatus];
+
+
+export const PlanStepStatus = {
+  PENDING: 'PENDING',
+  ACTIVE: 'ACTIVE',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  BLOCKED: 'BLOCKED',
+} as const;
+
+export type PlanStepAssignedRole = typeof PlanStepAssignedRole[keyof typeof PlanStepAssignedRole];
+
+
+export const PlanStepAssignedRole = {
+  manager: 'manager',
+  frontend: 'frontend',
+  backend: 'backend',
+  reviewer: 'reviewer',
+  validator: 'validator',
+} as const;
+
+export interface PlanStep {
+  id: string;
+  title: string;
+  description: string;
+  status: PlanStepStatus;
+  assignedRole?: PlanStepAssignedRole;
+  dependencies: string[];
+}
+
+export interface TaskDependency {
+  fromStep: string;
+  toStep: string;
+  reason: string;
+}
+
+export type AgentPlanComplexity = typeof AgentPlanComplexity[keyof typeof AgentPlanComplexity];
+
+
+export const AgentPlanComplexity = {
+  SIMPLE: 'SIMPLE',
+  MODERATE: 'MODERATE',
+  COMPLEX: 'COMPLEX',
+  REVIEW_ONLY: 'REVIEW_ONLY',
+} as const;
+
+export type AgentPlanStatus = typeof AgentPlanStatus[keyof typeof AgentPlanStatus];
+
+
+export const AgentPlanStatus = {
+  PENDING: 'PENDING',
+  ACTIVE: 'ACTIVE',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  BLOCKED: 'BLOCKED',
+} as const;
+
+export interface AgentPlan {
+  taskId: string;
+  goal: string;
+  steps: PlanStep[];
+  dependencies: TaskDependency[];
+  estimatedToolCalls: number;
+  estimatedModelCalls: number;
+  complexity: AgentPlanComplexity;
+  status: AgentPlanStatus;
+}
+
+export type ManagerDecision = {
+  action: 'decompose';
+  /** @maxItems 6 */
+  subtasks: { [key: string]: unknown }[];
+} | {
+  action: 'replan';
+  reason: string;
+  revisedPlan: AgentPlan;
+} | {
+  action: 'request-user-input';
+  question: string;
+} | {
+  action: 'finalize';
+  reason: string;
+} | {
+  action: 'blocked';
+  reason: string;
+};
+
 export interface AgentSession {
   id: string;
   task: string;
@@ -285,6 +404,10 @@ export interface AgentSession {
   selectedFiles: string[];
   activeModel: string;
   provider: string;
+  classification: TaskClassification;
+  managerPlan: AgentPlan;
+  managerDecision: ManagerDecision;
+  managerReplanCount: number;
   context: AgentSessionContext;
   toolResults: AgentSessionToolResultsItem[];
   proposal?: AgentSessionProposal;
@@ -557,4 +680,6 @@ export interface RepositoryOverview {
   dependencies: RepositoryOverviewDependenciesItem[];
   architecture: RepositoryOverviewArchitectureItem[];
 }
+
+export type RequestAgentTool200 = { [key: string]: unknown };
 

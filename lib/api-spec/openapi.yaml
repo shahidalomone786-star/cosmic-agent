@@ -136,6 +136,35 @@ paths:
                 $ref: "#/components/schemas/AgentSession"
         "404":
           description: Session not found
+  /ai/agent/sessions/{sessionId}/tools:
+    post:
+      operationId: requestAgentTool
+      tags: [agent]
+      summary: Request one bounded agent tool
+      description: The server validates the registered tool, permission, timeout, and bounded result. Approval-required tools are never executable through this endpoint.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentToolRequest"
+      responses:
+        "200":
+          description: Compact tool result
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Unknown tool, malformed input, bounded session, or unavailable session
+        "403":
+          description: Explicit approval required
+        "504":
+          description: Tool timeout
   /ai/chat/stream:
     post:
       operationId: streamAiMessage
@@ -581,6 +610,14 @@ components:
           type: object
           additionalProperties: { type: string }
       required: [name, permission, schema]
+    AgentToolRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        input:
+          type: object
+          additionalProperties: true
+      required: [name]
     AgentSessionInput:
       type: object
       properties:
@@ -611,6 +648,13 @@ components:
         selectedFiles: { type: array, items: { type: string } }
         activeModel: { type: string }
         provider: { type: string }
+        classification:
+          $ref: "#/components/schemas/TaskClassification"
+        managerPlan:
+          $ref: "#/components/schemas/AgentPlan"
+        managerDecision:
+          $ref: "#/components/schemas/ManagerDecision"
+        managerReplanCount: { type: number }
         context:
           type: object
           properties:
@@ -650,7 +694,77 @@ components:
             required: [id, type, label, timestamp]
         createdAt: { type: string }
         updatedAt: { type: string }
-      required: [id, task, status, currentStep, iteration, maxIterations, plan, selectedFiles, activeModel, provider, context, toolResults, events, createdAt, updatedAt]
+      required: [id, task, status, currentStep, iteration, maxIterations, plan, selectedFiles, activeModel, provider, classification, managerPlan, managerDecision, managerReplanCount, context, toolResults, events, createdAt, updatedAt]
+    TaskClassification:
+      type: object
+      properties:
+        category: { type: string, enum: [SIMPLE, MODERATE, COMPLEX, REVIEW_ONLY, CLARIFICATION_REQUIRED] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        reason: { type: string }
+        estimatedToolCalls: { type: number }
+        estimatedModelCalls: { type: number }
+      required: [category, confidence, reason, estimatedToolCalls, estimatedModelCalls]
+    AgentPlan:
+      type: object
+      properties:
+        taskId: { type: string }
+        goal: { type: string }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/PlanStep" }
+        dependencies:
+          type: array
+          items: { $ref: "#/components/schemas/TaskDependency" }
+        estimatedToolCalls: { type: number }
+        estimatedModelCalls: { type: number }
+        complexity: { type: string, enum: [SIMPLE, MODERATE, COMPLEX, REVIEW_ONLY] }
+        status: { type: string, enum: [PENDING, ACTIVE, COMPLETED, FAILED, BLOCKED] }
+      required: [taskId, goal, steps, dependencies, estimatedToolCalls, estimatedModelCalls, complexity, status]
+    PlanStep:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [PENDING, ACTIVE, COMPLETED, FAILED, BLOCKED] }
+        assignedRole: { type: string, enum: [manager, frontend, backend, reviewer, validator] }
+        dependencies: { type: array, items: { type: string } }
+      required: [id, title, description, status, dependencies]
+    TaskDependency:
+      type: object
+      properties:
+        fromStep: { type: string }
+        toStep: { type: string }
+        reason: { type: string }
+      required: [fromStep, toStep, reason]
+    ManagerDecision:
+      oneOf:
+        - type: object
+          properties:
+            action: { type: string, enum: [decompose] }
+            subtasks: { type: array, maxItems: 6, items: { type: object, additionalProperties: true } }
+          required: [action, subtasks]
+        - type: object
+          properties:
+            action: { type: string, enum: [replan] }
+            reason: { type: string }
+            revisedPlan: { $ref: "#/components/schemas/AgentPlan" }
+          required: [action, reason, revisedPlan]
+        - type: object
+          properties:
+            action: { type: string, enum: [request-user-input] }
+            question: { type: string }
+          required: [action, question]
+        - type: object
+          properties:
+            action: { type: string, enum: [finalize] }
+            reason: { type: string }
+          required: [action, reason]
+        - type: object
+          properties:
+            action: { type: string, enum: [blocked] }
+            reason: { type: string }
+          required: [action, reason]
     ChangeProposalInput:
       type: object
       properties:

@@ -9,9 +9,9 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import { ChangeProposalReview } from '@/components/change-proposal-review';
 import {
-  Aperture, Check, ChevronDown, Clipboard, Code2, Copy, Menu, MoreHorizontal,
+  Aperture, Bot, Check, ChevronDown, CircleAlert, CircleCheck, Code2, Copy, Gauge, LockKeyhole, Menu, MoreHorizontal,
   FileCode2,
-  Activity, GitBranch, Pencil, Plus, RefreshCw, Search, Send, Sparkles, Trash2, X, Square,
+  Activity, GitBranch, Pencil, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Terminal, Trash2, Wrench, X, Square,
 } from 'lucide-react';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
@@ -235,7 +235,7 @@ function Home() {
      <main className="chat-main">
        <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · read-only mode</span></div></div><div className="header-actions">{repository && <button className="context-indicator" onClick={() => setRepositoryOpen(true)}><span className="status-dot" /> {repository.owner}/{repository.name}{contextPaths.length ? ` · ${contextPaths.length} files` : ''}</button>}<button className="resource-toggle" onClick={() => setResourceOpen((open) => !open)} aria-label="Toggle resource status"><Activity size={15} /> Resources</button><button className="repo-toggle" onClick={() => setRepositoryOpen((open) => !open)} aria-label="Toggle repository explorer"><GitBranch size={15} /> Repository</button><div className="header-status"><span className="status-dot" /> Ready</div></div></header>
        <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
-         <div className="message-column">{!active?.messages.length && !proposal && !isProposing && !agentSession ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{isProposing && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>Reading selected files and preparing a safe diff preview…</span></div>}{agentSession && <AgentTimeline session={agentSession} />}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => { setProposal(null); setAgentSession(null); }} onRegenerate={() => { setProposal(null); setAgentSession(null); setDraft(proposalRequest); }} onApplied={(result) => recordAppliedEvent(result)} onCommitted={(result) => recordCommittedEvent(result)} onPushed={(result) => recordPushedEvent(result)} />}</>}</div>
+          <div className="message-column">{!active?.messages.length && !proposal && !isProposing && !agentSession ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{isProposing && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>Reading selected files and preparing a safe diff preview…</span></div>}{agentSession && <AgentTimeline session={agentSession} model={selectedModel} />}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => { setProposal(null); setAgentSession(null); }} onRegenerate={() => { setProposal(null); setAgentSession(null); setDraft(proposalRequest); }} onApplied={(result) => recordAppliedEvent(result)} onCommitted={(result) => recordCommittedEvent(result)} onPushed={(result) => recordPushedEvent(result)} />}</>}</div>
       </div>
        <div className="composer-wrap">{contextPaths.length > 0 && <div className="context-chips" aria-label="Selected repository context">{contextPaths.map((path) => <button key={path} onClick={() => setContextPaths((current) => current.filter((item) => item !== path))}>@{path} <X size={11} /></button>)}</div>}<form className="composer" onSubmit={handleSend}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder={repository ? "Ask about this repository…" : "Ask Cosmic Agent anything…"} rows={1} aria-label="Message Cosmic Agent" /><div className="composer-bottom"><div className="composer-meta"><div className="model-picker"><button type="button" className="model-trigger" onClick={() => setModelOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={modelOpen}><Sparkles size={14} /><span>{selectedModel.displayName}</span><ChevronDown size={14} /></button>{modelOpen && <div className="model-menu" role="listbox">{models.map((model) => <button type="button" role="option" aria-selected={model.id === selectedModel.id} className={model.id === selectedModel.id ? 'selected' : ''} key={model.id} onClick={() => changeModel(model.id)}><span><strong>{model.displayName}</strong><small>{model.provider} · {model.capabilities.join(' · ')}</small></span>{model.id === selectedModel.id && <Check size={15} />}</button>)}</div>}</div><span className="composer-hint">Enter to send · Shift + Enter for newline</span></div>{isStreaming || isProposing ? <button type="button" className="stop-button" onClick={() => { abortRef.current?.abort(); setIsProposing(false); }}><Square size={13} fill="currentColor" /> Stop</button> : <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="Send message"><Send size={16} /></button>}</div></form><p className="composer-disclaimer">Proposal preview mode · approval never writes to the repository.</p></div>
     </main>
@@ -256,14 +256,74 @@ function SourceUsage({ usage }: { usage?: ContextUsage }) {
   if (!visibleSources.length) return null;
   return <div className="source-usage" data-testid="assistant-source-usage"><div className="source-usage-label"><FileCode2 size={13} /> Sources used <span>{sources.length > visibleSources.length ? `· ${sources.length - visibleSources.length} more` : '· bounded view'}</span></div><div className="source-usage-list">{visibleSources.map((source, index) => <span className="source-usage-item" data-testid={`assistant-source-${index}`} key={`${source.path}-${source.startLine ?? 0}`} title={source.path}>{source.path}{source.startLine ? `:${source.startLine}${source.endLine && source.endLine !== source.startLine ? `–${source.endLine}` : ''}` : ''}</span>)}</div></div>;
 }
-function AgentTimeline({ session }: { session: RuntimeSession }) {
+function formatCompactNumber(value: number) {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(1)}m`;
+  if (value >= 1000) return `${Math.round(value / 1000)}k`;
+  return `${value}`;
+}
+
+function AgentTimeline({ session, model }: { session: RuntimeSession; model: AiModel }) {
+  const completedSteps = session.plan.filter((step) => step.status === 'complete').length;
+  const planPercent = session.plan.length ? Math.round((completedSteps / session.plan.length) * 100) : 0;
+  const estimatedTokens = Math.round(session.context.approximateChars / 4);
+  const contextPercent = model.contextWindow ? Math.min(100, Math.round((estimatedTokens / model.contextWindow) * 100)) : 0;
+  const toolNames = Array.from(new Set(session.toolResults.map((result) => result.tool)));
+  const hasWarnings = session.context.warnings.length > 0;
+  const approvalLabel = session.status === 'waiting_approval' ? 'Approval required' : session.proposal ? 'Proposal ready' : session.status === 'completed' ? 'Approved and complete' : 'No approval requested';
   const statusLabel = session.status === 'waiting_approval' ? 'Waiting for approval' : session.status === 'failed' ? 'Stopped safely' : session.status === 'completed' ? 'Complete' : 'Running';
-  return <section className="agent-timeline" aria-label="Agent execution timeline">
-    <div className="agent-timeline-head"><div><span className="agent-kicker"><Activity size={12} /> Agent runtime</span><strong>{session.task}</strong></div><span className={`agent-status ${session.status}`}>{statusLabel}</span></div>
-    <div className="agent-progress"><span style={{ width: `${Math.round((session.plan.filter((step) => step.status === 'complete').length / session.plan.length) * 100)}%` }} /></div>
-    <div className="agent-plan">{session.plan.map((step) => <div className={`agent-step ${step.status}`} key={step.id}><span className="agent-step-mark">{step.status === 'complete' ? '✓' : step.status === 'active' ? '●' : step.status === 'blocked' ? '!' : '○'}</span><span>{step.title}</span></div>)}</div>
-    <div className="agent-events">{session.events.slice(-6).map((event) => <div className="agent-event" key={event.id}><span className="agent-event-time">{new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><div><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}</div></div>)}</div>
-    <div className="agent-runtime-meta"><span>Iteration {session.iteration}/{session.maxIterations}</span><span>{session.toolResults.length} tool call{session.toolResults.length === 1 ? '' : 's'}</span><span>{session.context.filesIncluded} source{session.context.filesIncluded === 1 ? '' : 's'} included</span></div>
+  const recoveryLabel = session.status === 'failed' ? 'Recovery checkpoint' : session.status === 'waiting_approval' ? 'Paused at approval gate' : session.status === 'completed' ? 'Run closed cleanly' : 'Recovery armed';
+  const recoveryDetail = session.status === 'failed'
+    ? 'The runtime stopped without continuing tool calls. Review the last event before retrying.'
+    : session.status === 'waiting_approval'
+      ? 'No proposal action runs until an explicit approval is chosen below.'
+      : session.status === 'completed'
+        ? 'All planned runtime work has reported a final state.'
+        : 'The current checkpoint and bounded context are retained if the run needs to stop.';
+
+  return <section className="agent-timeline" aria-label="Agent execution timeline" data-testid="panel-agent-execution">
+    <div className="agent-timeline-head">
+      <div><span className="agent-kicker"><Activity size={12} /> Agent runtime</span><strong>{session.task}</strong></div>
+      <span className={`agent-status ${session.status}`} data-testid="status-agent-runtime">{statusLabel}</span>
+    </div>
+
+    <div className="agent-scan-grid" aria-label="Execution summary">
+      <div className="agent-scan-card" data-testid="status-agent-step"><span className="agent-scan-label"><Gauge size={12} /> Current step</span><strong>{session.currentStep.replaceAll('_', ' ')}</strong><small>{completedSteps} of {session.plan.length} plan steps complete</small></div>
+      <div className="agent-scan-card" data-testid="status-agent-model"><span className="agent-scan-label"><Bot size={12} /> Selected model</span><strong>{model.displayName}</strong><small>{session.provider} · iteration {session.iteration}/{session.maxIterations}</small></div>
+      <div className="agent-scan-card" data-testid="status-agent-context"><span className="agent-scan-label"><Terminal size={12} /> Context budget</span><strong>~{formatCompactNumber(session.context.approximateChars)} chars</strong><small>{session.context.filesIncluded} files · {contextPercent ? `${contextPercent}% estimated` : 'bounded view'}{session.context.chunked ? ' · chunked' : ''}</small></div>
+      <div className={`agent-scan-card approval-card ${session.status === 'waiting_approval' ? 'needs-approval' : ''}`} data-testid="status-agent-approval"><span className="agent-scan-label"><LockKeyhole size={12} /> Approval status</span><strong>{approvalLabel}</strong><small>{session.proposal ? `${session.proposal.files.length} files in proposal` : 'Read-only runtime boundary'}</small></div>
+    </div>
+
+    <div className="agent-progress-wrap">
+      <div className="agent-progress-caption"><span>Bounded execution plan</span><strong>{planPercent}%</strong></div>
+      <div className="agent-progress" aria-label={`${planPercent}% of execution plan complete`}><span style={{ width: `${planPercent}%` }} /></div>
+    </div>
+
+    <div className="agent-surface-grid">
+      <section className="agent-surface-panel plan-panel" aria-label="Bounded execution plan">
+        <div className="agent-panel-heading"><div><span className="agent-panel-kicker">Plan</span><strong>Guardrails for this run</strong></div><span className="agent-panel-count">{session.plan.length} steps</span></div>
+        <div className="agent-plan">{session.plan.map((step, index) => <div className={`agent-step ${step.status}`} key={step.id} data-testid={`row-agent-step-${step.id}`}><span className="agent-step-mark">{step.status === 'complete' ? <CircleCheck size={14} /> : step.status === 'blocked' ? <CircleAlert size={14} /> : index + 1}</span><span>{step.title}</span><em>{step.status}</em></div>)}</div>
+      </section>
+
+      <section className="agent-surface-panel tools-panel" aria-label="Approved tool registry and results">
+        <div className="agent-panel-heading"><div><span className="agent-panel-kicker"><ShieldCheck size={11} /> Approved tool registry</span><strong>Read-only tool boundary</strong></div><span className="agent-panel-count">{toolNames.length} registered</span></div>
+        {toolNames.length ? <div className="agent-tool-registry">{toolNames.map((tool) => <span className="agent-tool-badge" key={tool} data-testid={`badge-approved-tool-${tool}`}><Wrench size={11} /> {tool}<b>approved</b></span>)}</div> : <div className="agent-empty-note">No tools have been invoked in this run.</div>}
+        <div className="agent-results-heading"><span>Compact tool results</span><span>{session.toolResults.length} call{session.toolResults.length === 1 ? '' : 's'}</span></div>
+        {session.toolResults.length ? <div className="agent-tool-results">{session.toolResults.map((result, index) => <details className={`agent-tool-result ${result.status}`} key={`${result.tool}-${index}`} data-testid={`details-tool-result-${index}`}><summary><span className="tool-result-status"><span /> {result.status}</span><strong>{result.tool}</strong><small>{result.summary}</small></summary><div className="tool-result-detail"><span>Result detail</span><pre>{result.summary}</pre></div></details>)}</div> : <div className="agent-empty-note">Results will appear here as the runtime observes each tool.</div>}
+      </section>
+    </div>
+
+    <section className={`agent-recovery ${session.status}`} aria-label="Recovery state" data-testid="status-agent-recovery">
+      <div className="recovery-icon">{session.status === 'failed' ? <CircleAlert size={15} /> : <ShieldCheck size={15} />}</div>
+      <div><span className="agent-panel-kicker">{recoveryLabel}</span><strong>{recoveryDetail}</strong></div>
+      <span className="recovery-iteration">checkpoint {session.iteration}/{session.maxIterations}</span>
+    </section>
+
+    {(hasWarnings || session.context.offloadedResultId) && <details className="agent-context-notes" data-testid="details-agent-context-notes"><summary><span>Context notes</span><span>{session.context.warnings.length} warning{session.context.warnings.length === 1 ? '' : 's'}{session.context.offloadedResultId ? ' · result offloaded' : ''}</span></summary><div>{session.context.warnings.map((warning, index) => <p key={`${warning}-${index}`}>{warning}</p>)}{session.context.offloadedResultId && <p>Long tool output is available through checkpoint {session.context.offloadedResultId}.</p>}</div></details>}
+
+    <details className="agent-event-log" data-testid="details-agent-events">
+      <summary><span>Runtime activity</span><span>{session.events.length} event{session.events.length === 1 ? '' : 's'} recorded</span></summary>
+      <div className="agent-events">{session.events.slice(-6).map((event) => <div className="agent-event" key={event.id}><span className="agent-event-time">{new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><div><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}</div></div>)}</div>
+    </details>
   </section>;
 }
 function MessageBubble({ message, onRetry, onEdit }: { message: ChatMessage; onRetry: () => void; onEdit: (text: string) => void }) {

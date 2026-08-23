@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Response } from "express";
-import { AgentToolError, getAgentSession, getAgentToolDefinitions, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
+import { AgentToolError, getAgentSession, getAgentToolDefinitions, requestAgentTool, recordAgentValidation, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
 import {
   SendAiMessageBody,
   SendAiMessageResponse,
@@ -21,6 +21,17 @@ const router: IRouter = Router();
 
 router.get("/ai/agent/tools", (_req, res) => {
   res.json(getAgentToolDefinitions());
+});
+
+router.post("/ai/agent/sessions/:sessionId/tools", async (req, res) => {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const input = req.body?.input && typeof req.body.input === "object" ? req.body.input as Record<string, unknown> : {};
+  if (!name) { res.status(400).json({ error: "A registered tool name is required.", code: "invalid_input" }); return; }
+  try { res.json(await requestAgentTool(providerManager.getProvider(), req.params.sessionId, name, input)); }
+  catch (error) {
+    if (error instanceof AgentToolError) { res.status(error.code === "approval_required" ? 403 : error.code === "timeout" ? 504 : 400).json({ error: error.message, code: error.code }); return; }
+    sendProviderError(res, error);
+  }
 });
 
 router.post("/ai/agent/sessions", async (req, res) => {
@@ -103,7 +114,9 @@ router.post("/ai/change-proposal/execute", async (req, res) => {
   const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
   if (!proposalId) { res.status(400).json({ error: "Approval requires a valid proposal.", code: "invalid_proposal" }); return; }
   try {
-    res.json(await executeProposal(proposalId));
+    const result = await executeProposal(proposalId);
+    recordAgentValidation(proposalId, result);
+    res.json(result);
   } catch (error) {
     sendExecutionError(res, error);
   }

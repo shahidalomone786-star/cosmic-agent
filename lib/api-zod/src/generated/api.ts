@@ -158,6 +158,13 @@ export const CreateAgentSessionBody = zod.object({
   "paths": zod.array(zod.string()).max(createAgentSessionBodyPathsMax).optional()
 })
 
+export const createAgentSessionResponseClassificationConfidenceMin = 0;
+export const createAgentSessionResponseClassificationConfidenceMax = 1;
+
+export const createAgentSessionResponseManagerDecisionOneSubtasksMax = 6;
+
+
+
 export const CreateAgentSessionResponse = zod.object({
   "id": zod.string(),
   "task": zod.string(),
@@ -181,6 +188,72 @@ export const CreateAgentSessionResponse = zod.object({
   "selectedFiles": zod.array(zod.string()),
   "activeModel": zod.string(),
   "provider": zod.string(),
+  "classification": zod.object({
+  "category": zod.enum(['SIMPLE', 'MODERATE', 'COMPLEX', 'REVIEW_ONLY', 'CLARIFICATION_REQUIRED']),
+  "confidence": zod.number().min(createAgentSessionResponseClassificationConfidenceMin).max(createAgentSessionResponseClassificationConfidenceMax),
+  "reason": zod.string(),
+  "estimatedToolCalls": zod.number(),
+  "estimatedModelCalls": zod.number()
+}),
+  "managerPlan": zod.object({
+  "taskId": zod.string(),
+  "goal": zod.string(),
+  "steps": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "status": zod.enum(['PENDING', 'ACTIVE', 'COMPLETED', 'FAILED', 'BLOCKED']),
+  "assignedRole": zod.enum(['manager', 'frontend', 'backend', 'reviewer', 'validator']).optional(),
+  "dependencies": zod.array(zod.string())
+})),
+  "dependencies": zod.array(zod.object({
+  "fromStep": zod.string(),
+  "toStep": zod.string(),
+  "reason": zod.string()
+})),
+  "estimatedToolCalls": zod.number(),
+  "estimatedModelCalls": zod.number(),
+  "complexity": zod.enum(['SIMPLE', 'MODERATE', 'COMPLEX', 'REVIEW_ONLY']),
+  "status": zod.enum(['PENDING', 'ACTIVE', 'COMPLETED', 'FAILED', 'BLOCKED'])
+}),
+  "managerDecision": zod.union([zod.object({
+  "action": zod.enum(['decompose']),
+  "subtasks": zod.array(zod.record(zod.string(), zod.unknown())).max(createAgentSessionResponseManagerDecisionOneSubtasksMax)
+}),zod.object({
+  "action": zod.enum(['replan']),
+  "reason": zod.string(),
+  "revisedPlan": zod.object({
+  "taskId": zod.string(),
+  "goal": zod.string(),
+  "steps": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "status": zod.enum(['PENDING', 'ACTIVE', 'COMPLETED', 'FAILED', 'BLOCKED']),
+  "assignedRole": zod.enum(['manager', 'frontend', 'backend', 'reviewer', 'validator']).optional(),
+  "dependencies": zod.array(zod.string())
+})),
+  "dependencies": zod.array(zod.object({
+  "fromStep": zod.string(),
+  "toStep": zod.string(),
+  "reason": zod.string()
+})),
+  "estimatedToolCalls": zod.number(),
+  "estimatedModelCalls": zod.number(),
+  "complexity": zod.enum(['SIMPLE', 'MODERATE', 'COMPLEX', 'REVIEW_ONLY']),
+  "status": zod.enum(['PENDING', 'ACTIVE', 'COMPLETED', 'FAILED', 'BLOCKED'])
+})
+}),zod.object({
+  "action": zod.enum(['request-user-input']),
+  "question": zod.string()
+}),zod.object({
+  "action": zod.enum(['finalize']),
+  "reason": zod.string()
+}),zod.object({
+  "action": zod.enum(['blocked']),
+  "reason": zod.string()
+})]),
+  "managerReplanCount": zod.number(),
   "context": zod.object({
   "filesIncluded": zod.number(),
   "approximateChars": zod.number(),
@@ -218,6 +291,13 @@ export const GetAgentSessionParams = zod.object({
   "sessionId": zod.coerce.string()
 })
 
+export const getAgentSessionResponseClassificationConfidenceMin = 0;
+export const getAgentSessionResponseClassificationConfidenceMax = 1;
+
+export const getAgentSessionResponseManagerDecisionOneSubtasksMax = 6;
+
+
+
 export const GetAgentSessionResponse = zod.object({
   "id": zod.string(),
   "task": zod.string(),
@@ -241,6 +321,72 @@ export const GetAgentSessionResponse = zod.object({
   "selectedFiles": zod.array(zod.string()),
   "activeModel": zod.string(),
   "provider": zod.string(),
+  "classification": zod.object({
+  "category": zod.enum(['SIMPLE', 'MODERATE', 'COMPLEX', 'REVIEW_ONLY', 'CLARIFICATION_REQUIRED']),
+  "confidence": zod.number().min(getAgentSessionResponseClassificationConfidenceMin).max(getAgentSessionResponseClassificationConfidenceMax),
+  "reason": zod.string(),
+  "estimatedToolCalls": zod.number(),
+  "estimatedModelCalls": zod.number()
+}),
+  "managerPlan": zod.object({
+  "taskId": zod.string(),
+  "goal": zod.string(),
+  "steps": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "status": zod.enum(['PENDING', 'ACTIVE', 'COMPLETED', 'FAILED', 'BLOCKED']),
+  "assignedRole": zod.enum(['manager', 'frontend', 'backend', 'reviewer', 'validator']).optional(),
+  "dependencies": zod.array(zod.string())
+})),
+  "dependencies": zod.array(zod.object({
+  "fromStep": zod.string(),
+  "toStep": zod.string(),
+  "reason": zod.string()
+})),
+  "estimatedToolCalls": zod.number(),
+  "estimatedModelCalls": zod.number(),
+  "complexity": zod.enum(['SIMPLE', 'MODERATE', 'COMPLEX', 'REVIEW_ONLY']),
+  "status": zod.enum(['PENDING', 'ACTIVE', 'COMPLETED', 'FAILED', 'BLOCKED'])
+}),
+  "managerDecision": zod.union([zod.object({
+  "action": zod.enum(['decompose']),
+  "subtasks": zod.array(zod.record(zod.string(), zod.unknown())).max(getAgentSessionResponseManagerDecisionOneSubtasksMax)
+}),zod.object({
+  "action": zod.enum(['replan']),
+  "reason": zod.string(),
+  "revisedPlan": zod.object({
+  "taskId": zod.string(),
+  "goal": zod.string(),
+  "steps": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "status": zod.enum(['PENDING', 'ACTIVE', 'COMPLETED', 'FAILED', 'BLOCKED']),
+  "assignedRole": zod.enum(['manager', 'frontend', 'backend', 'reviewer', 'validator']).optional(),
+  "dependencies": zod.array(zod.string())
+})),
+  "dependencies": zod.array(zod.object({
+  "fromStep": zod.string(),
+  "toStep": zod.string(),
+  "reason": zod.string()
+})),
+  "estimatedToolCalls": zod.number(),
+  "estimatedModelCalls": zod.number(),
+  "complexity": zod.enum(['SIMPLE', 'MODERATE', 'COMPLEX', 'REVIEW_ONLY']),
+  "status": zod.enum(['PENDING', 'ACTIVE', 'COMPLETED', 'FAILED', 'BLOCKED'])
+})
+}),zod.object({
+  "action": zod.enum(['request-user-input']),
+  "question": zod.string()
+}),zod.object({
+  "action": zod.enum(['finalize']),
+  "reason": zod.string()
+}),zod.object({
+  "action": zod.enum(['blocked']),
+  "reason": zod.string()
+})]),
+  "managerReplanCount": zod.number(),
   "context": zod.object({
   "filesIncluded": zod.number(),
   "approximateChars": zod.number(),
@@ -269,6 +415,25 @@ export const GetAgentSessionResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string()
 })
+
+
+/**
+ * The server validates the registered tool, permission, timeout, and bounded result. Approval-required tools are never executable through this endpoint.
+ * @summary Request one bounded agent tool
+ */
+export const RequestAgentToolParams = zod.object({
+  "sessionId": zod.coerce.string()
+})
+
+
+
+
+export const RequestAgentToolBody = zod.object({
+  "name": zod.string().min(1),
+  "input": zod.record(zod.string(), zod.unknown()).optional()
+})
+
+export const RequestAgentToolResponse = zod.record(zod.string(), zod.unknown())
 
 
 /**

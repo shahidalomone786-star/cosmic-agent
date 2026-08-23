@@ -23,6 +23,7 @@ import type {
   AgentSession,
   AgentSessionInput,
   AgentToolDefinition,
+  AgentToolRequest,
   AiChatInput,
   AiChatResponse,
   AiModel,
@@ -47,6 +48,7 @@ import type {
   RepositorySearchInput,
   RepositorySearchResult,
   RepositoryTreeInput,
+  RequestAgentTool200,
   ResourceStatus
 } from './api.schemas';
 
@@ -609,6 +611,79 @@ export function useGetAgentSession<TData = Awaited<ReturnType<typeof getAgentSes
 
 
 
+
+export const getRequestAgentToolUrl = (sessionId: string,) => {
+
+
+
+
+  return `/api/ai/agent/sessions/${sessionId}/tools`
+}
+
+/**
+ * The server validates the registered tool, permission, timeout, and bounded result. Approval-required tools are never executable through this endpoint.
+ * @summary Request one bounded agent tool
+ */
+export const requestAgentTool = async (sessionId: string,
+    agentToolRequest: AgentToolRequest, options?: Parameters<typeof customFetch>[1]): Promise<RequestAgentTool200> => {
+
+  return customFetch<RequestAgentTool200>(getRequestAgentToolUrl(sessionId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(agentToolRequest)
+  }
+);}
+
+
+
+
+
+export const getRequestAgentToolMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestAgentTool>>, TError,{sessionId: string;data: BodyType<AgentToolRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof requestAgentTool>>, TError,{sessionId: string;data: BodyType<AgentToolRequest>}, TContext> => {
+
+const mutationKey = ['requestAgentTool'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof requestAgentTool>>, {sessionId: string;data: BodyType<AgentToolRequest>}> = (props) => {
+          const {sessionId,data} = props ?? {};
+
+          return  requestAgentTool(sessionId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RequestAgentToolMutationResult = NonNullable<Awaited<ReturnType<typeof requestAgentTool>>>
+    export type RequestAgentToolMutationBody = BodyType<AgentToolRequest>
+    export type RequestAgentToolMutationError = ErrorType<void>
+
+    /**
+ * @summary Request one bounded agent tool
+ */
+export const useRequestAgentTool = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestAgentTool>>, TError,{sessionId: string;data: BodyType<AgentToolRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof requestAgentTool>>,
+        TError,
+        {sessionId: string;data: BodyType<AgentToolRequest>},
+        TContext
+      > => {
+      return useMutation(getRequestAgentToolMutationOptions(options));
+    }
 
 export const getStreamAiMessageUrl = () => {
 
