@@ -14,6 +14,7 @@ import { createChangeProposal, ProposalError, type ChangeProposal } from "../ai/
 import { commitProposal, executeProposal, getCommitReview, getPushReview, pushProposal, registerProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
 import { GitHubWriteProviderError } from "../repository/github-write-provider";
 import { groqKeyManager } from "../ai/groq-key-manager";
+import { executeWorkerTool, getWorkerContext, validateWorkerReport, workerReportSchema, workerToolRequestSchema } from "../ai/worker-runtime";
 import { getGitHubResourceStatus } from "../repository/github-resource-manager";
 import { getContextResourceStatus, RETRY_CONTEXT_CHARS } from "../repository/context-manager";
 
@@ -29,9 +30,61 @@ router.post("/ai/agent/sessions/:sessionId/tools", async (req, res) => {
   if (!name) { res.status(400).json({ error: "A registered tool name is required.", code: "invalid_input" }); return; }
   try { res.json(await requestAgentTool(providerManager.getProvider(), req.params.sessionId, name, input)); }
   catch (error) {
-    if (error instanceof AgentToolError) { res.status(error.code === "approval_required" ? 403 : error.code === "timeout" ? 504 : 400).json({ error: error.message, code: error.code }); return; }
+    if (error instanceof AgentToolError) { res.status(["approval_required", "permission_denied"].includes(error.code) ? 403 : error.code === "timeout" ? 504 : 400).json({ error: error.message, code: error.code }); return; }
     sendProviderError(res, error);
   }
+});
+
+router.get("/ai/agent/sessions/:sessionId/workers/:role/context", (req, res) => {
+  const role = req.params.role === "frontend" || req.params.role === "backend" ? req.params.role : undefined;
+  if (!role) {
+    res.status(400).json({ error: "Worker role must be frontend or backend.", code: "invalid_input" });
+    return;
+  }
+  const assignedFiles = Array.isArray(req.query.files)
+    ? req.query.files.filter((file): file is string => typeof file === "string")
+    : typeof req.query.files === "string" ? [req.query.files] : [];
+  const context = getWorkerContext(req.params.sessionId, role, assignedFiles);
+  if (!context) {
+    res.status(404).json({ error: "Agent session not found.", code: "not_found" });
+    return;
+  }
+  res.json(context);
+});
+
+router.post("/ai/agent/sessions/:sessionId/workers/:role/tools", async (req, res) => {
+  const role = req.params.role;
+  if (role !== "frontend" && role !== "backend") {
+    res.status(400).json({ error: "Worker role must be frontend or backend.", code: "invalid_input" });
+    return;
+  }
+  const parsed = workerToolRequestSchema.safeParse({ role, name: req.body?.name, input: req.body?.input });
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid worker tool request.", code: "invalid_input" });
+    return;
+  }
+  try {
+    const result = await executeWorkerTool(providerManager.getProvider(), req.params.sessionId, parsed.data.role, parsed.data.name, parsed.data.input);
+    const session = getAgentSession(req.params.sessionId);
+    const trace = session?.toolTraces.at(-1);
+    res.json({ result, toolCallId: trace?.toolCallId, traceStatus: trace?.status });
+  } catch (error) {
+    if (error instanceof AgentToolError) {
+      res.status(["permission_denied", "approval_required"].includes(error.code) ? 403 : error.code === "timeout" ? 504 : 400)
+        .json({ error: error.message, code: error.code });
+      return;
+    }
+    sendProviderError(res, error);
+  }
+});
+
+router.post("/ai/agent/worker-reports", (req, res) => {
+  const parsed = workerReportSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Worker report failed schema validation.", code: "invalid_report", issues: parsed.error.issues.slice(0, 8) });
+    return;
+  }
+  res.json(validateWorkerReport(parsed.data));
 });
 
 router.post("/ai/agent/sessions", async (req, res) => {

@@ -254,6 +254,36 @@ export const CreateAgentSessionResponse = zod.object({
   "reason": zod.string()
 })]),
   "managerReplanCount": zod.number(),
+  "currentState": zod.enum(['UNDERSTANDING', 'CLASSIFYING', 'PLANNING', 'DECOMPOSING', 'EXECUTING', 'REVIEWING', 'VALIDATING', 'PROPOSING', 'WAITING_FOR_APPROVAL', 'APPLYING', 'COMPLETED', 'FAILED', 'BLOCKED', 'WAITING_FOR_PROVIDER']),
+  "contextMemory": zod.object({
+  "taskSummary": zod.string(),
+  "explicitFiles": zod.array(zod.string()),
+  "relevantFiles": zod.array(zod.string()),
+  "completedToolCalls": zod.array(zod.string()),
+  "activePlanStep": zod.string().optional(),
+  "importantFindings": zod.array(zod.string()),
+  "unresolvedQuestions": zod.array(zod.string()),
+  "contextVersion": zod.number()
+}),
+  "toolTraces": zod.array(zod.object({
+  "toolCallId": zod.string(),
+  "taskId": zod.string(),
+  "role": zod.enum(['manager', 'frontend', 'backend', 'reviewer', 'validator']),
+  "tool": zod.string(),
+  "status": zod.enum(['requested', 'running', 'completed', 'failed', 'denied', 'timeout']),
+  "startedAt": zod.string(),
+  "completedAt": zod.string().optional(),
+  "inputSummary": zod.string(),
+  "outputSummary": zod.string().optional(),
+  "errorCode": zod.string().optional()
+})),
+  "providerBudget": zod.object({
+  "estimatedCalls": zod.number(),
+  "estimatedTokens": zod.number(),
+  "remainingCalls": zod.number().optional(),
+  "remainingTokens": zod.number().optional(),
+  "status": zod.enum(['available', 'limited', 'cooldown', 'unknown'])
+}),
   "context": zod.object({
   "filesIncluded": zod.number(),
   "approximateChars": zod.number(),
@@ -387,6 +417,36 @@ export const GetAgentSessionResponse = zod.object({
   "reason": zod.string()
 })]),
   "managerReplanCount": zod.number(),
+  "currentState": zod.enum(['UNDERSTANDING', 'CLASSIFYING', 'PLANNING', 'DECOMPOSING', 'EXECUTING', 'REVIEWING', 'VALIDATING', 'PROPOSING', 'WAITING_FOR_APPROVAL', 'APPLYING', 'COMPLETED', 'FAILED', 'BLOCKED', 'WAITING_FOR_PROVIDER']),
+  "contextMemory": zod.object({
+  "taskSummary": zod.string(),
+  "explicitFiles": zod.array(zod.string()),
+  "relevantFiles": zod.array(zod.string()),
+  "completedToolCalls": zod.array(zod.string()),
+  "activePlanStep": zod.string().optional(),
+  "importantFindings": zod.array(zod.string()),
+  "unresolvedQuestions": zod.array(zod.string()),
+  "contextVersion": zod.number()
+}),
+  "toolTraces": zod.array(zod.object({
+  "toolCallId": zod.string(),
+  "taskId": zod.string(),
+  "role": zod.enum(['manager', 'frontend', 'backend', 'reviewer', 'validator']),
+  "tool": zod.string(),
+  "status": zod.enum(['requested', 'running', 'completed', 'failed', 'denied', 'timeout']),
+  "startedAt": zod.string(),
+  "completedAt": zod.string().optional(),
+  "inputSummary": zod.string(),
+  "outputSummary": zod.string().optional(),
+  "errorCode": zod.string().optional()
+})),
+  "providerBudget": zod.object({
+  "estimatedCalls": zod.number(),
+  "estimatedTokens": zod.number(),
+  "remainingCalls": zod.number().optional(),
+  "remainingTokens": zod.number().optional(),
+  "status": zod.enum(['available', 'limited', 'cooldown', 'unknown'])
+}),
   "context": zod.object({
   "filesIncluded": zod.number(),
   "approximateChars": zod.number(),
@@ -434,6 +494,107 @@ export const RequestAgentToolBody = zod.object({
 })
 
 export const RequestAgentToolResponse = zod.record(zod.string(), zod.unknown())
+
+
+/**
+ * Server validates worker role, permissions, safe paths, and generates the real tool trace. Workers cannot write, commit, push, or run builds.
+ * @summary Request a read-only worker tool
+ */
+export const RequestWorkerToolParams = zod.object({
+  "sessionId": zod.coerce.string(),
+  "role": zod.enum(['frontend', 'backend'])
+})
+
+
+
+
+export const RequestWorkerToolBody = zod.object({
+  "name": zod.string().min(1),
+  "input": zod.record(zod.string(), zod.unknown()).optional()
+})
+
+export const RequestWorkerToolResponse = zod.unknown()
+
+
+/**
+ * Worker reports are schema-validated and validation claims are checked against real server tool traces.
+ * @summary Validate and accept a worker report
+ */
+
+
+
+export const SubmitWorkerReportBody = zod.object({
+  "role": zod.enum(['frontend', 'backend']),
+  "taskId": zod.string(),
+  "subtaskId": zod.string(),
+  "filesInspected": zod.array(zod.string()),
+  "relevantFiles": zod.array(zod.string()),
+  "findings": zod.array(zod.object({
+  "title": zod.string(),
+  "description": zod.string(),
+  "file": zod.string().optional(),
+  "evidenceToolCallId": zod.string().optional()
+})),
+  "proposals": zod.array(zod.object({
+  "path": zod.string(),
+  "diff": zod.string(),
+  "rationale": zod.string(),
+  "risk": zod.enum(['low', 'medium', 'high']),
+  "addedLines": zod.number(),
+  "removedLines": zod.number()
+})),
+  "dependencies": zod.array(zod.string()),
+  "validation": zod.object({
+  "status": zod.enum(['pass', 'fail', 'not-verified']),
+  "sourceToolCallId": zod.string().optional(),
+  "summary": zod.string().min(1)
+}),
+  "toolCallIds": zod.array(zod.string()),
+  "tokensUsed": zod.number().optional(),
+  "status": zod.enum(['completed', 'blocked', 'failed'])
+})
+
+
+
+
+
+export const SubmitWorkerReportResponse = zod.object({
+  "report": zod.object({
+  "role": zod.enum(['frontend', 'backend']),
+  "taskId": zod.string(),
+  "subtaskId": zod.string(),
+  "filesInspected": zod.array(zod.string()),
+  "relevantFiles": zod.array(zod.string()),
+  "findings": zod.array(zod.object({
+  "title": zod.string(),
+  "description": zod.string(),
+  "file": zod.string().optional(),
+  "evidenceToolCallId": zod.string().optional()
+})),
+  "proposals": zod.array(zod.object({
+  "path": zod.string(),
+  "diff": zod.string(),
+  "rationale": zod.string(),
+  "risk": zod.enum(['low', 'medium', 'high']),
+  "addedLines": zod.number(),
+  "removedLines": zod.number()
+})),
+  "dependencies": zod.array(zod.string()),
+  "validation": zod.object({
+  "status": zod.enum(['pass', 'fail', 'not-verified']),
+  "sourceToolCallId": zod.string().optional(),
+  "summary": zod.string().min(1)
+}),
+  "toolCallIds": zod.array(zod.string()),
+  "tokensUsed": zod.number().optional(),
+  "status": zod.enum(['completed', 'blocked', 'failed'])
+}),
+  "validation": zod.object({
+  "status": zod.enum(['pass', 'fail', 'not-verified']),
+  "sourceToolCallId": zod.string().optional(),
+  "summary": zod.string().min(1)
+})
+})
 
 
 /**

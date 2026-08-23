@@ -49,7 +49,10 @@ import type {
   RepositorySearchResult,
   RepositoryTreeInput,
   RequestAgentTool200,
-  ResourceStatus
+  ResourceStatus,
+  SubmitWorkerReport200,
+  WorkerReport,
+  WorkerToolRequest
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -683,6 +686,153 @@ export const useRequestAgentTool = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getRequestAgentToolMutationOptions(options));
+    }
+
+export const getRequestWorkerToolUrl = (sessionId: string,
+    role: 'frontend' | 'backend',) => {
+
+
+
+
+  return `/api/ai/agent/sessions/${sessionId}/workers/${role}/tools`
+}
+
+/**
+ * Server validates worker role, permissions, safe paths, and generates the real tool trace. Workers cannot write, commit, push, or run builds.
+ * @summary Request a read-only worker tool
+ */
+export const requestWorkerTool = async (sessionId: string,
+    role: 'frontend' | 'backend',
+    workerToolRequest: WorkerToolRequest, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getRequestWorkerToolUrl(sessionId,role),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(workerToolRequest)
+  }
+);}
+
+
+
+
+
+export const getRequestWorkerToolMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestWorkerTool>>, TError,{sessionId: string;role: 'frontend' | 'backend';data: BodyType<WorkerToolRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof requestWorkerTool>>, TError,{sessionId: string;role: 'frontend' | 'backend';data: BodyType<WorkerToolRequest>}, TContext> => {
+
+const mutationKey = ['requestWorkerTool'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof requestWorkerTool>>, {sessionId: string;role: 'frontend' | 'backend';data: BodyType<WorkerToolRequest>}> = (props) => {
+          const {sessionId,role,data} = props ?? {};
+
+          return  requestWorkerTool(sessionId,role,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RequestWorkerToolMutationResult = NonNullable<Awaited<ReturnType<typeof requestWorkerTool>>>
+    export type RequestWorkerToolMutationBody = BodyType<WorkerToolRequest>
+    export type RequestWorkerToolMutationError = ErrorType<void>
+
+    /**
+ * @summary Request a read-only worker tool
+ */
+export const useRequestWorkerTool = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestWorkerTool>>, TError,{sessionId: string;role: 'frontend' | 'backend';data: BodyType<WorkerToolRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof requestWorkerTool>>,
+        TError,
+        {sessionId: string;role: 'frontend' | 'backend';data: BodyType<WorkerToolRequest>},
+        TContext
+      > => {
+      return useMutation(getRequestWorkerToolMutationOptions(options));
+    }
+
+export const getSubmitWorkerReportUrl = () => {
+
+
+
+
+  return `/api/ai/agent/worker-reports`
+}
+
+/**
+ * Worker reports are schema-validated and validation claims are checked against real server tool traces.
+ * @summary Validate and accept a worker report
+ */
+export const submitWorkerReport = async (workerReport: WorkerReport, options?: Parameters<typeof customFetch>[1]): Promise<SubmitWorkerReport200> => {
+
+  return customFetch<SubmitWorkerReport200>(getSubmitWorkerReportUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(workerReport)
+  }
+);}
+
+
+
+
+
+export const getSubmitWorkerReportMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof submitWorkerReport>>, TError,{data: BodyType<WorkerReport>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof submitWorkerReport>>, TError,{data: BodyType<WorkerReport>}, TContext> => {
+
+const mutationKey = ['submitWorkerReport'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof submitWorkerReport>>, {data: BodyType<WorkerReport>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  submitWorkerReport(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SubmitWorkerReportMutationResult = NonNullable<Awaited<ReturnType<typeof submitWorkerReport>>>
+    export type SubmitWorkerReportMutationBody = BodyType<WorkerReport>
+    export type SubmitWorkerReportMutationError = ErrorType<void>
+
+    /**
+ * @summary Validate and accept a worker report
+ */
+export const useSubmitWorkerReport = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof submitWorkerReport>>, TError,{data: BodyType<WorkerReport>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof submitWorkerReport>>,
+        TError,
+        {data: BodyType<WorkerReport>},
+        TContext
+      > => {
+      return useMutation(getSubmitWorkerReportMutationOptions(options));
     }
 
 export const getStreamAiMessageUrl = () => {

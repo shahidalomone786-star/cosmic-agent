@@ -244,6 +244,26 @@ export type AgentSessionPlanItem = {
   status: AgentSessionPlanItemStatus;
 };
 
+export type AgentSessionCurrentState = typeof AgentSessionCurrentState[keyof typeof AgentSessionCurrentState];
+
+
+export const AgentSessionCurrentState = {
+  UNDERSTANDING: 'UNDERSTANDING',
+  CLASSIFYING: 'CLASSIFYING',
+  PLANNING: 'PLANNING',
+  DECOMPOSING: 'DECOMPOSING',
+  EXECUTING: 'EXECUTING',
+  REVIEWING: 'REVIEWING',
+  VALIDATING: 'VALIDATING',
+  PROPOSING: 'PROPOSING',
+  WAITING_FOR_APPROVAL: 'WAITING_FOR_APPROVAL',
+  APPLYING: 'APPLYING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  BLOCKED: 'BLOCKED',
+  WAITING_FOR_PROVIDER: 'WAITING_FOR_PROVIDER',
+} as const;
+
 export type AgentSessionContext = {
   filesIncluded: number;
   approximateChars: number;
@@ -392,6 +412,71 @@ export type ManagerDecision = {
   reason: string;
 };
 
+export interface AgentContextMemory {
+  taskSummary: string;
+  explicitFiles: string[];
+  relevantFiles: string[];
+  completedToolCalls: string[];
+  activePlanStep?: string;
+  importantFindings: string[];
+  unresolvedQuestions: string[];
+  contextVersion: number;
+}
+
+export type ToolCallTraceRole = typeof ToolCallTraceRole[keyof typeof ToolCallTraceRole];
+
+
+export const ToolCallTraceRole = {
+  manager: 'manager',
+  frontend: 'frontend',
+  backend: 'backend',
+  reviewer: 'reviewer',
+  validator: 'validator',
+} as const;
+
+export type ToolCallTraceStatus = typeof ToolCallTraceStatus[keyof typeof ToolCallTraceStatus];
+
+
+export const ToolCallTraceStatus = {
+  requested: 'requested',
+  running: 'running',
+  completed: 'completed',
+  failed: 'failed',
+  denied: 'denied',
+  timeout: 'timeout',
+} as const;
+
+export interface ToolCallTrace {
+  toolCallId: string;
+  taskId: string;
+  role: ToolCallTraceRole;
+  tool: string;
+  status: ToolCallTraceStatus;
+  startedAt: string;
+  completedAt?: string;
+  inputSummary: string;
+  outputSummary?: string;
+  errorCode?: string;
+}
+
+export type ProviderBudgetStatus = typeof ProviderBudgetStatus[keyof typeof ProviderBudgetStatus];
+
+
+export const ProviderBudgetStatus = {
+  available: 'available',
+  limited: 'limited',
+  cooldown: 'cooldown',
+  unknown: 'unknown',
+} as const;
+
+export interface ProviderBudget {
+  estimatedCalls: number;
+  estimatedTokens: number;
+  remainingCalls?: number;
+  remainingTokens?: number;
+  status: ProviderBudgetStatus;
+}
+
 export interface AgentSession {
   id: string;
   task: string;
@@ -408,12 +493,116 @@ export interface AgentSession {
   managerPlan: AgentPlan;
   managerDecision: ManagerDecision;
   managerReplanCount: number;
+  currentState: AgentSessionCurrentState;
+  contextMemory: AgentContextMemory;
+  toolTraces: ToolCallTrace[];
+  providerBudget: ProviderBudget;
   context: AgentSessionContext;
   toolResults: AgentSessionToolResultsItem[];
   proposal?: AgentSessionProposal;
   events: AgentSessionEventsItem[];
   createdAt: string;
   updatedAt: string;
+}
+
+export type ValidationClaimStatus = typeof ValidationClaimStatus[keyof typeof ValidationClaimStatus];
+
+
+export const ValidationClaimStatus = {
+  pass: 'pass',
+  fail: 'fail',
+  'not-verified': 'not-verified',
+} as const;
+
+export interface ValidationClaim {
+  status: ValidationClaimStatus;
+  sourceToolCallId?: string;
+  /** @minLength 1 */
+  summary: string;
+}
+
+export interface WorkerFinding {
+  title: string;
+  description: string;
+  file?: string;
+  evidenceToolCallId?: string;
+}
+
+export type FileProposalRisk = typeof FileProposalRisk[keyof typeof FileProposalRisk];
+
+
+export const FileProposalRisk = {
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+} as const;
+
+export interface FileProposal {
+  path: string;
+  diff: string;
+  rationale: string;
+  risk: FileProposalRisk;
+  addedLines: number;
+  removedLines: number;
+}
+
+export type WorkerReportRole = typeof WorkerReportRole[keyof typeof WorkerReportRole];
+
+
+export const WorkerReportRole = {
+  frontend: 'frontend',
+  backend: 'backend',
+} as const;
+
+export type WorkerReportStatus = typeof WorkerReportStatus[keyof typeof WorkerReportStatus];
+
+
+export const WorkerReportStatus = {
+  completed: 'completed',
+  blocked: 'blocked',
+  failed: 'failed',
+} as const;
+
+export interface WorkerReport {
+  role: WorkerReportRole;
+  taskId: string;
+  subtaskId: string;
+  filesInspected: string[];
+  relevantFiles: string[];
+  findings: WorkerFinding[];
+  proposals: FileProposal[];
+  dependencies: string[];
+  validation: ValidationClaim;
+  toolCallIds: string[];
+  tokensUsed?: number;
+  status: WorkerReportStatus;
+}
+
+export type WorkerToolRequestInput = { [key: string]: unknown };
+
+export interface WorkerToolRequest {
+  /** @minLength 1 */
+  name: string;
+  input?: WorkerToolRequestInput;
+}
+
+export type WorkerContextRole = typeof WorkerContextRole[keyof typeof WorkerContextRole];
+
+
+export const WorkerContextRole = {
+  frontend: 'frontend',
+  backend: 'backend',
+} as const;
+
+export interface WorkerContext {
+  role: WorkerContextRole;
+  taskId: string;
+  task: string;
+  explicitFiles: string[];
+  assignedFiles: string[];
+  relevantFiles: string[];
+  contextMemory: AgentContextMemory;
+  priorToolCallIds: string[];
 }
 
 export type ChangeProposalInputRepositoryContext = {
@@ -682,4 +871,9 @@ export interface RepositoryOverview {
 }
 
 export type RequestAgentTool200 = { [key: string]: unknown };
+
+export type SubmitWorkerReport200 = {
+  report: WorkerReport;
+  validation: ValidationClaim;
+};
 

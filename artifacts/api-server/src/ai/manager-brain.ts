@@ -5,6 +5,9 @@ export const MAX_PLAN_STEPS = 15;
 export const MAX_SUBTASKS = 6;
 export const MAX_REPLANS = 2;
 export const MAX_MANAGER_ITERATIONS = 10;
+export const MAX_TOOL_CALLS = 20;
+export const MAX_CONTEXT_RETRIES = 2;
+export const MAX_CLASSIFICATION_RETRIES = 1;
 
 export type TaskCategory =
   | "SIMPLE"
@@ -74,6 +77,41 @@ export interface ManagerState {
   replanCount: number;
   iteration: number;
   selectedModel: string;
+}
+
+export type ToolTraceStatus = "requested" | "running" | "completed" | "failed" | "denied" | "timeout";
+export type ToolRole = PlanRole;
+export interface ToolCallTrace {
+  toolCallId: string;
+  taskId: string;
+  role: ToolRole;
+  tool: string;
+  status: ToolTraceStatus;
+  startedAt: string;
+  completedAt?: string;
+  inputSummary: string;
+  outputSummary?: string;
+  errorCode?: string;
+}
+
+export interface AgentContextMemory {
+  taskSummary: string;
+  explicitFiles: string[];
+  relevantFiles: string[];
+  completedToolCalls: string[];
+  activePlanStep?: string;
+  importantFindings: string[];
+  unresolvedQuestions: string[];
+  contextVersion: number;
+}
+
+export type ProviderBudgetStatus = "available" | "limited" | "cooldown" | "unknown";
+export interface ProviderBudget {
+  estimatedCalls: number;
+  estimatedTokens: number;
+  remainingCalls?: number;
+  remainingTokens?: number;
+  status: ProviderBudgetStatus;
 }
 
 const clampConfidence = (value: number) => Math.max(0, Math.min(1, value));

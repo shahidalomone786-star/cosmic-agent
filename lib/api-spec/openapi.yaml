@@ -165,6 +165,57 @@ paths:
           description: Explicit approval required
         "504":
           description: Tool timeout
+  /ai/agent/sessions/{sessionId}/workers/{role}/tools:
+    post:
+      operationId: requestWorkerTool
+      tags: [agent]
+      summary: Request a read-only worker tool
+      description: Server validates worker role, permissions, safe paths, and generates the real tool trace. Workers cannot write, commit, push, or run builds.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: role
+          in: path
+          required: true
+          schema: { type: string, enum: [frontend, backend] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkerToolRequest" }
+      responses:
+        "200":
+          description: Bounded tool result with server-generated trace identity
+        "400":
+          description: Invalid request
+        "403":
+          description: Worker permission denied
+  /ai/agent/worker-reports:
+    post:
+      operationId: submitWorkerReport
+      tags: [agent]
+      summary: Validate and accept a worker report
+      description: Worker reports are schema-validated and validation claims are checked against real server tool traces.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkerReport" }
+      responses:
+        "200":
+          description: Worker report with server-verified validation claim
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report: { $ref: "#/components/schemas/WorkerReport" }
+                  validation: { $ref: "#/components/schemas/ValidationClaim" }
+                required: [report, validation]
+        "400":
+          description: Invalid worker report
   /ai/chat/stream:
     post:
       operationId: streamAiMessage
@@ -655,6 +706,17 @@ components:
         managerDecision:
           $ref: "#/components/schemas/ManagerDecision"
         managerReplanCount: { type: number }
+        currentState:
+          type: string
+          enum: [UNDERSTANDING, CLASSIFYING, PLANNING, DECOMPOSING, EXECUTING, REVIEWING, VALIDATING, PROPOSING, WAITING_FOR_APPROVAL, APPLYING, COMPLETED, FAILED, BLOCKED, WAITING_FOR_PROVIDER]
+        contextMemory:
+          $ref: "#/components/schemas/AgentContextMemory"
+        toolTraces:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCallTrace"
+        providerBudget:
+          $ref: "#/components/schemas/ProviderBudget"
         context:
           type: object
           properties:
@@ -694,7 +756,7 @@ components:
             required: [id, type, label, timestamp]
         createdAt: { type: string }
         updatedAt: { type: string }
-      required: [id, task, status, currentStep, iteration, maxIterations, plan, selectedFiles, activeModel, provider, classification, managerPlan, managerDecision, managerReplanCount, context, toolResults, events, createdAt, updatedAt]
+      required: [id, task, status, currentStep, iteration, maxIterations, plan, selectedFiles, activeModel, provider, classification, managerPlan, managerDecision, managerReplanCount, currentState, contextMemory, toolTraces, providerBudget, context, toolResults, events, createdAt, updatedAt]
     TaskClassification:
       type: object
       properties:
@@ -765,6 +827,100 @@ components:
             action: { type: string, enum: [blocked] }
             reason: { type: string }
           required: [action, reason]
+    AgentContextMemory:
+      type: object
+      properties:
+        taskSummary: { type: string }
+        explicitFiles: { type: array, items: { type: string } }
+        relevantFiles: { type: array, items: { type: string } }
+        completedToolCalls: { type: array, items: { type: string } }
+        activePlanStep: { type: string }
+        importantFindings: { type: array, items: { type: string } }
+        unresolvedQuestions: { type: array, items: { type: string } }
+        contextVersion: { type: number }
+      required: [taskSummary, explicitFiles, relevantFiles, completedToolCalls, importantFindings, unresolvedQuestions, contextVersion]
+    ToolCallTrace:
+      type: object
+      properties:
+        toolCallId: { type: string }
+        taskId: { type: string }
+        role: { type: string, enum: [manager, frontend, backend, reviewer, validator] }
+        tool: { type: string }
+        status: { type: string, enum: [requested, running, completed, failed, denied, timeout] }
+        startedAt: { type: string }
+        completedAt: { type: string }
+        inputSummary: { type: string }
+        outputSummary: { type: string }
+        errorCode: { type: string }
+      required: [toolCallId, taskId, role, tool, status, startedAt, inputSummary]
+    ValidationClaim:
+      type: object
+      properties:
+        status: { type: string, enum: [pass, fail, not-verified] }
+        sourceToolCallId: { type: string }
+        summary: { type: string, minLength: 1 }
+      required: [status, summary]
+    WorkerFinding:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        file: { type: string }
+        evidenceToolCallId: { type: string }
+      required: [title, description]
+    FileProposal:
+      type: object
+      properties:
+        path: { type: string }
+        diff: { type: string }
+        rationale: { type: string }
+        risk: { type: string, enum: [low, medium, high] }
+        addedLines: { type: number }
+        removedLines: { type: number }
+      required: [path, diff, rationale, risk, addedLines, removedLines]
+    WorkerReport:
+      type: object
+      properties:
+        role: { type: string, enum: [frontend, backend] }
+        taskId: { type: string }
+        subtaskId: { type: string }
+        filesInspected: { type: array, items: { type: string } }
+        relevantFiles: { type: array, items: { type: string } }
+        findings: { type: array, items: { $ref: "#/components/schemas/WorkerFinding" } }
+        proposals: { type: array, items: { $ref: "#/components/schemas/FileProposal" } }
+        dependencies: { type: array, items: { type: string } }
+        validation: { $ref: "#/components/schemas/ValidationClaim" }
+        toolCallIds: { type: array, items: { type: string } }
+        tokensUsed: { type: number }
+        status: { type: string, enum: [completed, blocked, failed] }
+      required: [role, taskId, subtaskId, filesInspected, relevantFiles, findings, proposals, dependencies, validation, toolCallIds, status]
+    WorkerToolRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        input: { type: object, additionalProperties: true }
+      required: [name]
+    WorkerContext:
+      type: object
+      properties:
+        role: { type: string, enum: [frontend, backend] }
+        taskId: { type: string }
+        task: { type: string }
+        explicitFiles: { type: array, items: { type: string } }
+        assignedFiles: { type: array, items: { type: string } }
+        relevantFiles: { type: array, items: { type: string } }
+        contextMemory: { $ref: "#/components/schemas/AgentContextMemory" }
+        priorToolCallIds: { type: array, items: { type: string } }
+      required: [role, taskId, task, explicitFiles, assignedFiles, relevantFiles, contextMemory, priorToolCallIds]
+    ProviderBudget:
+      type: object
+      properties:
+        estimatedCalls: { type: number }
+        estimatedTokens: { type: number }
+        remainingCalls: { type: number }
+        remainingTokens: { type: number }
+        status: { type: string, enum: [available, limited, cooldown, unknown] }
+      required: [estimatedCalls, estimatedTokens, status]
     ChangeProposalInput:
       type: object
       properties:
