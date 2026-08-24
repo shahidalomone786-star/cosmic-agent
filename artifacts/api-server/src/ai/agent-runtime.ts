@@ -96,6 +96,16 @@ export type AgentSession = {
     validationResults: Record<string, string[]>;
     retryCounts: Record<string, number>;
   };
+  orchestration: {
+    selectedWorkers: PlanRole[];
+    queuedSubtasks: string[];
+    activeSubtasks: string[];
+    completedSubtasks: string[];
+    workerReportIds: string[];
+    reviewStatus: "pending" | "completed" | "blocked" | "failed";
+    reviewVerdict?: "approve" | "request-changes" | "reject";
+    transitionHistory: Array<{ from: AgentRuntimeState; to: AgentRuntimeState; at: string }>;
+  };
   recovery?: { code: string; message: string; newProposalRequired: boolean };
   proposal?: { proposalId: string; files: string[]; risk: string; summary: string };
   proposalData?: ChangeProposal;
@@ -134,6 +144,51 @@ const proposalSessions = new Map<string, string>();
 let sessionSequence = 0;
 
 const now = () => new Date().toISOString();
+const VALID_TRANSITIONS: Record<AgentRuntimeState, readonly AgentRuntimeState[]> = {
+  UNDERSTANDING: ["CLASSIFYING"],
+  CLASSIFYING: ["PLANNING"],
+  PLANNING: ["DECOMPOSING", "EXECUTING", "BLOCKED"],
+  DECOMPOSING: ["EXECUTING", "BLOCKED"],
+  EXECUTING: ["REVIEWING", "PROPOSING", "FAILED", "WAITING_FOR_PROVIDER"],
+  REVIEWING: ["PROPOSING", "BLOCKED", "FAILED"],
+  PROPOSING: ["WAITING_FOR_APPROVAL", "FAILED", "WAITING_FOR_PROVIDER"],
+  WAITING_FOR_APPROVAL: ["APPLYING", "PROPOSING", "BLOCKED"],
+  APPLYING: ["VALIDATING", "FAILED"],
+  VALIDATING: ["COMPLETED", "PROPOSING", "FAILED", "BLOCKED"],
+  COMPLETED: [],
+  FAILED: [],
+  BLOCKED: [],
+  WAITING_FOR_PROVIDER: ["PROPOSING", "EXECUTING", "FAILED", "BLOCKED"],
+};
+
+export function transitionAgentState(session: AgentSession, next: AgentRuntimeState): void {
+  if (session.currentState === next) return;
+  if (!VALID_TRANSITIONS[session.currentState].includes(next)) {
+    throw new AgentToolError("permission_denied", `Invalid agent state transition: ${session.currentState} -> ${next}.`);
+  }
+  session.orchestration.transitionHistory.push({ from: session.currentState, to: next, at: now() });
+  session.currentState = next;
+  session.updatedAt = now();
+}
+
+export function selectWorkerRoles(classification: TaskClassification): PlanRole[] {
+  if (classification.category === "SIMPLE" || classification.category === "MODERATE") return ["frontend"];
+  if (classification.category === "COMPLEX") return ["backend", "frontend", "reviewer", "validator"];
+  return [];
+}
+
+export function reserveProviderBudget(session: AgentSession, estimatedTokens: number): void {
+  const budget = session.providerBudget;
+  if (budget.status === "cooldown" || budget.status === "limited" || budget.remainingCalls === 0 ||
+      (budget.remainingTokens !== undefined && budget.remainingTokens < estimatedTokens)) {
+    transitionAgentState(session, "WAITING_FOR_PROVIDER");
+    throw new GroqProviderError("rate_limited", "The shared provider budget is unavailable; the task is queued safely.");
+  }
+  budget.usedCalls = (budget.usedCalls ?? 0) + 1;
+  budget.usedTokens = (budget.usedTokens ?? 0) + estimatedTokens;
+  if (budget.remainingCalls !== undefined) budget.remainingCalls = Math.max(0, budget.remainingCalls - 1);
+  if (budget.remainingTokens !== undefined) budget.remainingTokens = Math.max(0, budget.remainingTokens - estimatedTokens);
+}
 const uniquePaths = (paths: string[] = []) =>
   [...new Set(paths.map((path) => path.replace(/^@/, "").trim()).filter(Boolean))].slice(0, 20);
 const addEvent = (session: AgentSession, type: AgentEvent["type"], label: string, detail?: string) => {
@@ -470,6 +525,15 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       validationResults: {},
       retryCounts: {},
     },
+    orchestration: {
+      selectedWorkers: selectWorkerRoles(manager.classification),
+      queuedSubtasks: [],
+      activeSubtasks: [],
+      completedSubtasks: [],
+      workerReportIds: [],
+      reviewStatus: manager.classification.category === "COMPLEX" ? "pending" : "completed",
+      transitionHistory: [],
+    },
     events: [],
     createdAt: now(),
     updatedAt: now(),
@@ -477,15 +541,21 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
   sessions.set(session.id, session);
   addEvent(session, "task_started", "Task started", "Bounded runtime initialized.");
   updateStep(session, "understand", "active");
-  session.currentState = "CLASSIFYING";
+  transitionAgentState(session, "CLASSIFYING");
   addEvent(session, "tool_called", "Runtime inspected task", "The task is limited to the approved agent workflow.");
   completeStep(session, "understand");
   updateStep(session, "plan", "active");
-  session.currentState = "PLANNING";
+  transitionAgentState(session, "PLANNING");
   addEvent(session, "planning", "Plan created", `${MAX_AGENT_ITERATIONS} iteration limit; approval gates remain active.`);
   completeStep(session, "plan");
   updateStep(session, "retrieve_context", "active");
-  session.currentState = "EXECUTING";
+  if (manager.classification.category === "COMPLEX") {
+    transitionAgentState(session, "DECOMPOSING");
+    session.orchestration.queuedSubtasks = manager.decision.action === "decompose"
+      ? manager.decision.subtasks.map((subtask) => subtask.id)
+      : [];
+  }
+  transitionAgentState(session, "EXECUTING");
   addEvent(session, "context_retrieval", "Retrieving relevant context", session.selectedFiles.length ? `${session.selectedFiles.length} explicitly selected file(s) prioritized.` : "No explicit files selected.");
 
   let context = unavailableContext();
@@ -518,6 +588,8 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
   if (session.repository && session.selectedFiles.length) {
     try {
       addEvent(session, "tool_called", "Calling create_proposal", "Proposal-only generation; no repository write is permitted.");
+      transitionAgentState(session, manager.classification.category === "COMPLEX" ? "REVIEWING" : "PROPOSING");
+      reserveProviderBudget(session, Math.min(12_000, Math.max(1_000, session.task.length + session.context.approximateChars)));
       const proposal = await executeAgentTool(provider, session, "create_proposal", { repository: session.repository, paths: session.selectedFiles, request: session.task }) as ChangeProposal;
       registerProposal(proposal, session.repository);
       session.proposal = {
@@ -529,7 +601,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       session.proposalData = proposal;
       proposalSessions.set(proposal.proposalId, session.id);
       session.status = "waiting_approval";
-      session.currentState = "WAITING_FOR_APPROVAL";
+      transitionAgentState(session, "WAITING_FOR_APPROVAL");
       session.currentStep = "observe";
        session.plan = session.plan.map((step) =>
         step.id === "act" ? { ...step, status: "complete" } :
@@ -540,7 +612,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       addEvent(session, "approval_requested", "Human approval required", "The proposal must be reviewed before any write or validation operation.");
     } catch (error) {
       session.status = error instanceof GroqProviderError && ["rate_limited", "timeout", "temporary_failure"].includes(error.code) ? "failed" : "failed";
-      session.currentState = error instanceof GroqProviderError && ["rate_limited", "timeout", "temporary_failure"].includes(error.code) ? "WAITING_FOR_PROVIDER" : "FAILED";
+      transitionAgentState(session, error instanceof GroqProviderError && ["rate_limited", "timeout", "temporary_failure"].includes(error.code) ? "WAITING_FOR_PROVIDER" : "FAILED");
       session.currentStep = "complete";
       session.plan = session.plan.map((step) => step.id === "act" ? { ...step, status: "blocked" } : step);
       addEvent(session, "task_failed", "Proposal generation failed", error instanceof Error ? error.message : "The proposal could not be generated.");
@@ -548,7 +620,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
     }
   } else {
     session.status = "completed";
-    session.currentState = "COMPLETED";
+    transitionAgentState(session, "COMPLETED");
     session.currentStep = "complete";
     session.plan = session.plan.map((step) => ({ ...step, status: step.id === "complete" ? "complete" : "complete" }));
     addEvent(session, "task_completed", "Planning complete", "Connect a repository and select files to generate an approval-gated proposal.");
@@ -572,7 +644,8 @@ export function beginProposalValidation(proposalId: string): AgentSession | unde
   if (session) {
     invalidateSessionContext(session, "approved proposal applied");
     session.appliedProposalId = proposalId;
-    session.currentState = "VALIDATING";
+    transitionAgentState(session, "APPLYING");
+    transitionAgentState(session, "VALIDATING");
     session.currentStep = "verify";
     addEvent(session, "validation_started", "Validator started", "Only server-executed typecheck and build results can establish validation.");
   }

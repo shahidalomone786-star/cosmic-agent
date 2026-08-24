@@ -113,6 +113,10 @@ export type ProviderBudgetStatus = "available" | "limited" | "cooldown" | "unkno
 export interface ProviderBudget {
   estimatedCalls: number;
   estimatedTokens: number;
+  usedCalls?: number;
+  usedTokens?: number;
+  queueDepth?: number;
+  cooldownUntil?: string;
   remainingCalls?: number;
   remainingTokens?: number;
   status: ProviderBudgetStatus;
