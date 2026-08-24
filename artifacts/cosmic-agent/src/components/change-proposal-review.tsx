@@ -63,7 +63,20 @@ export function ChangeProposalReview({
   const approve = async () => {
     setBusy(true); setError("");
     try {
-      const result = await executeChangeProposal({ proposalId: proposal.proposalId });
+      const userId = localStorage.getItem("cosmic-user-id") ?? crypto.randomUUID();
+      localStorage.setItem("cosmic-user-id", userId);
+      const approvalResponse = await fetch("/api/ai/change-proposal/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-cosmic-user-id": userId },
+        body: JSON.stringify({ proposalId: proposal.proposalId }),
+      });
+      if (!approvalResponse.ok) {
+        const body = await approvalResponse.json().catch(() => ({}));
+        throw new Error(body.error || "User approval could not be recorded.");
+      }
+      const approval = await approvalResponse.json() as { approvalId?: string };
+      if (!approval.approvalId) throw new Error("The server did not return an approval authorization.");
+      const result = await executeChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId } as Parameters<typeof executeChangeProposal>[0]);
       setExecution(result);
       if (result.status === "applied") {
         onApplied(result);

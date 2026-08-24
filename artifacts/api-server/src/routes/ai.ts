@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Response } from "express";
-import { AgentToolError, beginProposalValidation, getAgentSession, getAgentToolDefinitions, requestAgentTool, recordAgentValidation, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
+import { AgentToolError, beginProposalValidation, getAgentSession, getAgentSessionForProposal, getAgentToolDefinitions, requestAgentTool, recordAgentValidation, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
 import {
   SendAiMessageBody,
   SendAiMessageResponse,
@@ -11,7 +11,7 @@ import { GroqProviderError } from "../ai/groq-provider";
 import { retrieveRepositoryContext, type RepositoryContextResult, type RepositoryRef } from "../repository/github-provider";
 import { CreateChangeProposalBody, CreateChangeProposalResponse } from "@workspace/api-zod";
 import { createChangeProposal, ProposalError, type ChangeProposal } from "../ai/change-proposal";
-import { commitProposal, executeProposal, getCommitReview, getPushReview, markProposalValidated, pushProposal, registerProposal, rejectAppliedProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
+import { commitProposal, executeProposal, getCommitReview, getPushReview, getRegisteredProposal, markProposalValidated, pushProposal, registerProposal, rejectAppliedProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
 import { GitHubWriteProviderError } from "../repository/github-write-provider";
 import { groqKeyManager } from "../ai/groq-key-manager";
 import { executeWorkerTool, getWorkerContext, validateWorkerReport, workerReportSchema, workerToolRequestSchema } from "../ai/worker-runtime";
@@ -19,6 +19,7 @@ import { getGitHubResourceStatus } from "../repository/github-resource-manager";
 import { getContextResourceStatus, RETRY_CONTEXT_CHARS } from "../repository/context-manager";
 import { reviewProposal, reviewRequestSchema } from "../ai/reviewer-runtime";
 import { validateAppliedProposal } from "../ai/validator-runtime";
+import { approveProposal, ApprovalGateError, approvalRequestSchema } from "../ai/approval-gate";
 
 const router: IRouter = Router();
 
@@ -176,9 +177,10 @@ router.post("/ai/change-proposal", async (req, res) => {
 
 router.post("/ai/change-proposal/execute", async (req, res) => {
   const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
+  const approvalId = typeof req.body?.approvalId === "string" ? req.body.approvalId.trim() : "";
   if (!proposalId) { res.status(400).json({ error: "Approval requires a valid proposal.", code: "invalid_proposal" }); return; }
   try {
-    const result = await executeProposal(proposalId);
+    const result = await executeProposal(proposalId, approvalId);
     const session = beginProposalValidation(proposalId);
     if (!session) {
       await rejectAppliedProposal(proposalId);
@@ -211,6 +213,35 @@ router.post("/ai/change-proposal/execute", async (req, res) => {
     });
   } catch (error) {
     sendExecutionError(res, error);
+  }
+});
+
+router.post("/ai/change-proposal/approve", (req, res) => {
+  const parsed = approvalRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Approval requires a valid proposal.", code: "invalid_approval" });
+    return;
+  }
+  const proposalId = parsed.data.proposalId.trim();
+  const userId = typeof req.headers["x-cosmic-user-id"] === "string" ? req.headers["x-cosmic-user-id"] : "";
+  if (!userId) {
+    res.status(401).json({ error: "An authenticated user approval is required.", code: "unauthenticated" });
+    return;
+  }
+  const session = getAgentSessionForProposal(proposalId);
+  const registered = getRegisteredProposal(proposalId);
+  if (!registered) {
+    res.status(404).json({ error: "Proposal not found.", code: "not_found" });
+    return;
+  }
+  try {
+    res.json(approveProposal(registered.proposal, registered.repository, userId, session?.id));
+  } catch (error) {
+    if (error instanceof ApprovalGateError) {
+      res.status(400).json({ error: error.message, code: error.code });
+      return;
+    }
+    res.status(400).json({ error: "Approval could not be recorded.", code: "invalid_approval" });
   }
 });
 
@@ -381,6 +412,10 @@ function sendProposalError(res: Response, error: unknown): void {
 }
 
 function sendExecutionError(res: Response, error: unknown): void {
+  if (error instanceof ApprovalGateError) {
+    res.status(error.code === "unauthenticated" ? 401 : error.code === "stale_proposal" ? 409 : 403).json({ error: error.message, code: error.code });
+    return;
+  }
   if (error instanceof GitHubWriteProviderError) {
     res.status(error.code === "conflict" ? 409 : 503).json({ error: error.message, code: error.code });
     return;

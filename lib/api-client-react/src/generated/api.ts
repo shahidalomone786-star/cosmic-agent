@@ -37,6 +37,7 @@ import type {
   HealthStatus,
   ProposalActionInput,
   ProposalActionResult,
+  ProposalApproval,
   PushResult,
   PushReview,
   RepositoryConnectInput,
@@ -1080,7 +1081,7 @@ export const executeChangeProposal = async (executeChangeProposalInput: ExecuteC
 
 
 
-export const getExecuteChangeProposalMutationOptions = <TError = ErrorType<void>,
+export const getExecuteChangeProposalMutationOptions = <TError = ErrorType<unknown>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof executeChangeProposal>>, TError,{data: BodyType<ExecuteChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof executeChangeProposal>>, TError,{data: BodyType<ExecuteChangeProposalInput>}, TContext> => {
 
@@ -1109,12 +1110,12 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ExecuteChangeProposalMutationResult = NonNullable<Awaited<ReturnType<typeof executeChangeProposal>>>
     export type ExecuteChangeProposalMutationBody = BodyType<ExecuteChangeProposalInput>
-    export type ExecuteChangeProposalMutationError = ErrorType<void>
+    export type ExecuteChangeProposalMutationError = ErrorType<unknown>
 
     /**
  * @summary Apply an approved proposal locally and validate it
  */
-export const useExecuteChangeProposal = <TError = ErrorType<void>,
+export const useExecuteChangeProposal = <TError = ErrorType<unknown>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof executeChangeProposal>>, TError,{data: BodyType<ExecuteChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof executeChangeProposal>>,
@@ -1123,6 +1124,78 @@ export const useExecuteChangeProposal = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getExecuteChangeProposalMutationOptions(options));
+    }
+
+export const getPostAiChangeProposalApproveUrl = () => {
+
+
+
+
+  return `/api/ai/change-proposal/approve`
+}
+
+/**
+ * Creates a server-held approval binding. It does not modify files.
+ * @summary Record explicit user approval for one exact proposal
+ */
+export const postAiChangeProposalApprove = async (proposalActionInput: ProposalActionInput, options?: Parameters<typeof customFetch>[1]): Promise<ProposalApproval> => {
+
+  return customFetch<ProposalApproval>(getPostAiChangeProposalApproveUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(proposalActionInput)
+  }
+);}
+
+
+
+
+
+export const getPostAiChangeProposalApproveMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof postAiChangeProposalApprove>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof postAiChangeProposalApprove>>, TError,{data: BodyType<ProposalActionInput>}, TContext> => {
+
+const mutationKey = ['postAiChangeProposalApprove'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof postAiChangeProposalApprove>>, {data: BodyType<ProposalActionInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  postAiChangeProposalApprove(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PostAiChangeProposalApproveMutationResult = NonNullable<Awaited<ReturnType<typeof postAiChangeProposalApprove>>>
+    export type PostAiChangeProposalApproveMutationBody = BodyType<ProposalActionInput>
+    export type PostAiChangeProposalApproveMutationError = ErrorType<void>
+
+    /**
+ * @summary Record explicit user approval for one exact proposal
+ */
+export const usePostAiChangeProposalApprove = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof postAiChangeProposalApprove>>, TError,{data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof postAiChangeProposalApprove>>,
+        TError,
+        {data: BodyType<ProposalActionInput>},
+        TContext
+      > => {
+      return useMutation(getPostAiChangeProposalApproveMutationOptions(options));
     }
 
 export const getUndoChangeProposalUrl = () => {

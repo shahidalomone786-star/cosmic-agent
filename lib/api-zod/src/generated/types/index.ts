@@ -67,6 +67,8 @@ export * from './planStepStatus';
 export * from './proposalActionInput';
 export * from './proposalActionResult';
 export * from './proposalActionResultStatus';
+export * from './proposalApproval';
+export * from './proposalApprovalFileHashes';
 export * from './providerBudget';
 export * from './providerBudgetStatus';
 export * from './pushResult';

@@ -832,8 +832,10 @@ export const CreateChangeProposalResponse = zod.object({
 
 
 
+
 export const ExecuteChangeProposalBody = zod.object({
-  "proposalId": zod.string().min(1)
+  "proposalId": zod.string().min(1),
+  "approvalId": zod.string().min(1)
 })
 
 export const ExecuteChangeProposalResponse = zod.object({
@@ -858,6 +860,29 @@ export const ExecuteChangeProposalResponse = zod.object({
   "toolCallIds": zod.array(zod.string()),
   "summary": zod.string()
 }).optional()
+})
+
+
+/**
+ * Creates a server-held approval binding. It does not modify files.
+ * @summary Record explicit user approval for one exact proposal
+ */
+
+
+
+export const PostAiChangeProposalApproveBody = zod.object({
+  "proposalId": zod.string().min(1)
+})
+
+export const PostAiChangeProposalApproveResponse = zod.object({
+  "approvalId": zod.string(),
+  "taskId": zod.string().optional(),
+  "proposalId": zod.string(),
+  "proposalVersion": zod.string(),
+  "repositorySha": zod.string(),
+  "fileHashes": zod.record(zod.string(), zod.string()),
+  "approvedAt": zod.string(),
+  "approvedByUser": zod.string()
 })
 
 

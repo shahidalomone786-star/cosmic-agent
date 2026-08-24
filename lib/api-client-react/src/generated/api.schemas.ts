@@ -827,6 +827,21 @@ export interface ChangeProposal {
 export interface ExecuteChangeProposalInput {
   /** @minLength 1 */
   proposalId: string;
+  /** @minLength 1 */
+  approvalId: string;
+}
+
+export type ProposalApprovalFileHashes = {[key: string]: string};
+
+export interface ProposalApproval {
+  approvalId: string;
+  taskId?: string;
+  proposalId: string;
+  proposalVersion: string;
+  repositorySha: string;
+  fileHashes: ProposalApprovalFileHashes;
+  approvedAt: string;
+  approvedByUser: string;
 }
 
 export interface ProposalActionInput {

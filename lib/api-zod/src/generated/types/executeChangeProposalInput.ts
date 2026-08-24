@@ -9,4 +9,6 @@
 export interface ExecuteChangeProposalInput {
   /** @minLength 1 */
   proposalId: string;
+  /** @minLength 1 */
+  approvalId: string;
 }

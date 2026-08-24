@@ -133,7 +133,8 @@ export type AgentToolDefinition = {
 
 const managerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status"]);
 const proposalTools = new Set(["create_proposal"]);
-const workerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck"]);
+const workerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status"]);
+const reviewerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status"]);
 const validatorTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck", "run_build", "inspect_validation_result"]);
 const execFileAsync = promisify(execFile);
 
@@ -308,9 +309,13 @@ export async function executeAgentTool(
     finishTrace("denied", "permission_denied");
     throw new AgentToolError("permission_denied", `The ${role} role is not permitted to request ${name}.`);
   }
-  if ((role === "frontend" || role === "backend" || role === "reviewer") && !workerTools.has(name)) {
+  if ((role === "frontend" || role === "backend") && !workerTools.has(name)) {
     finishTrace("denied", "permission_denied");
     throw new AgentToolError("permission_denied", `The ${role} worker is not permitted to request ${name}.`);
+  }
+  if (role === "reviewer" && !reviewerTools.has(name)) {
+    finishTrace("denied", "permission_denied");
+    throw new AgentToolError("permission_denied", "The reviewer is limited to read-only inspection and evidence analysis.");
   }
   if (role === "validator" && !validatorTools.has(name)) {
     finishTrace("denied", "permission_denied");
@@ -335,8 +340,7 @@ export async function executeAgentTool(
   }
   if (
     definition.permission === "approval_required" &&
-    !(name === "run_typecheck" && role !== "validator") &&
-    !(role === "validator" && session.appliedProposalId === input.proposalId)
+    role === "validator" && session.appliedProposalId === input.proposalId
   ) {
     finishTrace("denied", "approval_required");
     addEvent(session, "approval_requested", "Approval gate held", `${name} cannot run until the matching human approval flow is completed.`);
@@ -706,6 +710,8 @@ function summarizeOutput(value: unknown): string {
 function boundedEvidence(value: unknown): string {
   return JSON.stringify(value)
     .replace(/("(?:secret|token|key|password|credential)[^"]*"\s*:\s*)"[^"]*"/gi, '$1"[redacted]"')
+    .replace(/(gh[pousr]_|sk-|Bearer\s+)[A-Za-z0-9._-]+/gi, "$1[redacted]")
+    .replace(/-----BEGIN[\s\S]*?-----END [^-]+-----/gi, "[redacted-private-key]")
     .slice(0, 12_000);
 }
 

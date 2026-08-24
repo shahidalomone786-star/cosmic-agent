@@ -310,6 +310,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ChangeExecutionResult"
+  /ai/change-proposal/approve:
+    post:
+      tags: [ai]
+      summary: Record explicit user approval for one exact proposal
+      description: Creates a server-held approval binding. It does not modify files.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Approval recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProposalApproval"
+        "401": { description: Authenticated user required }
+        "404": { description: Proposal not found }
         "400":
           description: Invalid or already handled proposal
         "409":
@@ -1073,7 +1093,22 @@ components:
       type: object
       properties:
         proposalId: { type: string, minLength: 1 }
-      required: [proposalId]
+        approvalId: { type: string, minLength: 1 }
+      required: [proposalId, approvalId]
+    ProposalApproval:
+      type: object
+      properties:
+        approvalId: { type: string }
+        taskId: { type: string }
+        proposalId: { type: string }
+        proposalVersion: { type: string }
+        repositorySha: { type: string }
+        fileHashes:
+          type: object
+          additionalProperties: { type: string }
+        approvedAt: { type: string }
+        approvedByUser: { type: string }
+      required: [approvalId, proposalId, proposalVersion, repositorySha, fileHashes, approvedAt, approvedByUser]
     ProposalActionInput:
       type: object
       properties:

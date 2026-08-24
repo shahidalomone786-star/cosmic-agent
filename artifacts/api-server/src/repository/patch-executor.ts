@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import type { ChangeProposal } from "../ai/change-proposal";
 import type { RepositoryRef } from "./github-provider";
 import { githubWriteProvider } from "./github-write-provider";
+import { assertApproval, type ProposalApproval } from "../ai/approval-gate";
 
 export type ExecutionStatus = "applied" | "validation_failed";
 export type ExecutionResult = {
@@ -73,6 +74,7 @@ type Session = {
   validated: boolean;
   commit?: CommitResult;
   commitBaseSha?: string;
+  approval?: ProposalApproval;
 };
 
 const MAX_FILES = Number(process.env.COSMIC_MAX_PROPOSAL_FILES ?? 20);
@@ -103,9 +105,24 @@ export function registerProposal(proposal: ChangeProposal, repository?: Reposito
   sessions.set(proposal.proposalId, { proposal, repository, snapshots: [], applied: false, undoAvailable: false, validated: false });
 }
 
-export async function executeProposal(proposalId: string): Promise<ExecutionResult> {
+export function getRegisteredProposal(proposalId: string): { proposal: ChangeProposal; repository?: RepositoryRef } | undefined {
+  const session = sessions.get(proposalId);
+  return session ? { proposal: session.proposal, repository: session.repository } : undefined;
+}
+
+export async function executeProposal(proposalId: string, approvalId?: string): Promise<ExecutionResult> {
   const session = sessions.get(proposalId);
   if (!session) throw new PatchExecutionError("not_found", "This proposal is no longer available. Please regenerate it.");
+  if (!approvalId) throw new PatchExecutionError("invalid_proposal", "Explicit user approval is required before applying this proposal.");
+  try {
+    session.approval = assertApproval(approvalId, session.proposal, session.repository);
+  } catch (error) {
+    if (error instanceof Error && "code" in error) {
+      const code = (error as { code: string }).code;
+      if (code === "stale_proposal") throw new PatchExecutionError("stale_file", error.message);
+    }
+    throw new PatchExecutionError("invalid_proposal", error instanceof Error ? error.message : "The approval could not be verified.");
+  }
   if (session.applied) throw new PatchExecutionError("already_applied", "This proposal has already been applied.");
   const snapshots: Snapshot[] = [];
   for (const file of session.proposal.files) {
