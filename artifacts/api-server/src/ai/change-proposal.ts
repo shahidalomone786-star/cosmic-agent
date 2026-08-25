@@ -6,6 +6,7 @@ export type ProposalRisk = "LOW" | "MEDIUM" | "HIGH";
 
 export type ChangeProposalFile = {
   path: string;
+  operation: "create" | "edit";
   language: string;
   originalCode: string;
   proposedCode: string;
@@ -76,19 +77,37 @@ export async function createChangeProposal(
   }
 
   const explicitPaths = [...new Set(paths.map((path) => path.replace(/^@/, "").trim()).filter(Boolean))].slice(0, MAX_PROPOSAL_FILES);
-  const allowedPaths = [...new Set([...explicitPaths, ...context.sources.map((source) => source.path)])];
+  const existingContextPaths = new Set(context.sources.map((source) => source.path));
+  const createRequested = /\b(create|new file|add a new file|add new file)\b/i.test(request);
+  const createPaths = createRequested
+    ? explicitPaths.filter((path) => !existingContextPaths.has(path) && context.warnings.some((warning) => warning.includes(path)))
+    : [];
+  const allowedPaths = createPaths.length
+    ? createPaths
+    : [...new Set([...explicitPaths, ...context.sources.map((source) => source.path)])];
   if (!allowedPaths.length || !context.text.trim()) {
     throw new ProposalError("insufficient_context", "Select one or more readable source files before generating a change proposal.");
   }
 
-  const sourceFiles = [];
+  const sourceFiles: Array<{
+    path: string;
+    language: string;
+    size: number;
+    content: string;
+    truncated: boolean;
+    operation: "create" | "edit";
+  }> = [];
   for (const path of allowedPaths) {
     assertEditablePath(path);
     try {
       const file = await readRepositoryFile(repository, path);
       if (file.content.includes("\u0000")) throw new ProposalError("binary_file", `Binary file edits are not supported: ${path}`);
-      sourceFiles.push(file);
+      sourceFiles.push({ ...file, operation: "edit" });
     } catch (error) {
+      if (createPaths.includes(path) && error instanceof RepositoryError && error.code === "file_not_found") {
+        sourceFiles.push({ path, language: "text", size: 0, content: "", truncated: false, operation: "create" });
+        continue;
+      }
       throw mapRepositoryError(error, path);
     }
   }
@@ -106,10 +125,11 @@ export async function createChangeProposal(
         "Return JSON only. Do not use markdown fences.",
         "You may propose changes only to files listed in the source context.",
         "Return the complete proposed file content in proposedCode; never return a partial snippet.",
+         "For a new file, set operation to create. For an existing file, set operation to edit and preserve all unrelated content.",
         "Do not modify authentication files named authStore.ts or AuthContext.tsx, secrets, credentials, environment files, keys, certificates, node_modules, or .git paths.",
         "Do not add credentials, tokens, passwords, or private keys.",
         "Do not claim the change was applied. This is only a review preview.",
-        'JSON shape: {"summary":"...","explanation":"...","risk":"LOW|MEDIUM|HIGH","files":[{"path":"...","proposedCode":"...","explanation":"..."}]}',
+         'JSON shape: {"summary":"...","explanation":"...","risk":"LOW|MEDIUM|HIGH","files":[{"path":"...","operation":"create|edit","proposedCode":"...","explanation":"..."}]}',
       ].join("\n"),
     },
     {
@@ -144,6 +164,9 @@ export async function createChangeProposal(
     if (!item || typeof item !== "object") throw new ProposalError("malformed_model_response", "The model returned a malformed file proposal.");
     const candidate = item as Record<string, unknown>;
     const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
+    const operation = candidate.operation === "create" || candidate.operation === "edit"
+      ? candidate.operation
+      : sourceFiles.find((file) => file.path === path)?.operation ?? "edit";
     const proposedCode = typeof candidate.proposedCode === "string" ? candidate.proposedCode : "";
     const explanation = typeof candidate.explanation === "string" ? candidate.explanation : "Proposed change from the selected repository context.";
     if (!path || !proposedCode) throw new ProposalError("malformed_model_response", "Every proposed file needs a path and complete proposedCode.");
@@ -151,11 +174,13 @@ export async function createChangeProposal(
     if (!allowedPaths.includes(path)) throw new ProposalError("insufficient_context", `The proposal targets a file outside the selected context: ${path}`);
     const original = sourceFiles.find((file) => file.path === path);
     if (!original) throw new ProposalError("file_not_found", `The proposed file was not available in the retrieved context: ${path}`);
+    if (operation === "create" && original.operation !== "create") throw new ProposalError("invalid_patch", `Cannot create an existing file: ${path}`);
+    if (operation === "edit" && original.operation !== "edit") throw new ProposalError("invalid_patch", `Cannot edit a file that does not exist: ${path}`);
     if (SECRET_LIKE.test(proposedCode)) throw new ProposalError("protected_file", `The proposal contains credential-like content and was rejected: ${path}`);
     if (proposedCode === original.content) throw new ProposalError("invalid_patch", `The proposal does not change ${path}.`);
-    const diff = unifiedDiff(path, original.content, proposedCode);
+    const diff = unifiedDiff(path, original.content, proposedCode, operation);
     const stats = diffStats(original.content, proposedCode);
-    files.push({ path, language: original.language, originalCode: original.content, proposedCode, diff, explanation, ...stats });
+    files.push({ path, operation, language: original.language, originalCode: original.content, proposedCode, diff, explanation, ...stats });
   }
 
   if (!files.length) throw new ProposalError("invalid_patch", "The model did not produce an applicable change.");
@@ -205,7 +230,7 @@ function diffStats(original: string, proposed: string): { addedLines: number; re
   };
 }
 
-function unifiedDiff(path: string, original: string, proposed: string): string {
+function unifiedDiff(path: string, original: string, proposed: string, operation: "create" | "edit"): string {
   const originalLines = original.split("\n");
   const proposedLines = proposed.split("\n");
   const stats = diffStats(original, proposed);
@@ -217,12 +242,18 @@ function unifiedDiff(path: string, original: string, proposed: string): string {
   const originalEnd = Math.min(originalLines.length, originalLines.length - suffix + 3);
   const proposedEnd = Math.min(proposedLines.length, proposedLines.length - suffix + 3);
   const lines = [
-    `--- a/${path}`,
+    operation === "create" ? "--- /dev/null" : `--- a/${path}`,
     `+++ b/${path}`,
-    `@@ -${start + 1},${Math.max(0, originalEnd - start)} +${start + 1},${Math.max(0, proposedEnd - start)} @@`,
+    operation === "create"
+      ? `@@ -0,0 +1,${proposedLines.length} @@`
+      : `@@ -${start + 1},${Math.max(0, originalEnd - start)} +${start + 1},${Math.max(0, proposedEnd - start)} @@`,
     ...originalLines.slice(start, prefix).map((line) => ` ${line}`),
-    ...originalLines.slice(prefix, originalLines.length - suffix).map((line) => `-${line}`),
-    ...proposedLines.slice(prefix, proposedLines.length - suffix).map((line) => `+${line}`),
+    ...(operation === "create"
+      ? proposedLines.map((line) => `+${line}`)
+      : originalLines.slice(prefix, originalLines.length - suffix).map((line) => `-${line}`)),
+    ...(operation === "create"
+      ? []
+      : proposedLines.slice(prefix, proposedLines.length - suffix).map((line) => `+${line}`)),
     ...originalLines.slice(originalLines.length - suffix, originalEnd).map((line) => ` ${line}`),
   ];
   if (!stats.addedLines && !stats.removedLines) throw new ProposalError("invalid_patch", `No diff could be generated for ${path}.`);

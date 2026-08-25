@@ -37,6 +37,7 @@ export * from './changeExecutionResult';
 export * from './changeExecutionResultStatus';
 export * from './changeProposal';
 export * from './changeProposalFile';
+export * from './changeProposalFileOperation';
 export * from './changeProposalInput';
 export * from './changeProposalInputRepositoryContext';
 export * from './changeProposalRisk';

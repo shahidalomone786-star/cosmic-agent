@@ -5,9 +5,11 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ChangeProposalFileOperation } from './changeProposalFileOperation';
 
 export interface ChangeProposalFile {
   path: string;
+  operation: ChangeProposalFileOperation;
   language: string;
   originalCode: string;
   proposedCode: string;

@@ -785,8 +785,17 @@ export interface ChangeProposalInput {
   repositoryContext: ChangeProposalInputRepositoryContext;
 }
 
+export type ChangeProposalFileOperation = typeof ChangeProposalFileOperation[keyof typeof ChangeProposalFileOperation];
+
+
+export const ChangeProposalFileOperation = {
+  create: 'create',
+  edit: 'edit',
+} as const;
+
 export interface ChangeProposalFile {
   path: string;
+  operation: ChangeProposalFileOperation;
   language: string;
   originalCode: string;
   proposedCode: string;

@@ -810,6 +810,7 @@ export const CreateChangeProposalResponse = zod.object({
   "risk": zod.enum(['LOW', 'MEDIUM', 'HIGH']),
   "files": zod.array(zod.object({
   "path": zod.string(),
+  "operation": zod.enum(['create', 'edit']),
   "language": zod.string(),
   "originalCode": zod.string(),
   "proposedCode": zod.string(),

@@ -1059,6 +1059,9 @@ components:
       type: object
       properties:
         path: { type: string }
+        operation:
+          type: string
+          enum: [create, edit]
         language: { type: string }
         originalCode: { type: string }
         proposedCode: { type: string }
@@ -1066,7 +1069,7 @@ components:
         explanation: { type: string }
         addedLines: { type: number }
         removedLines: { type: number }
-      required: [path, language, originalCode, proposedCode, diff, explanation, addedLines, removedLines]
+      required: [path, operation, language, originalCode, proposedCode, diff, explanation, addedLines, removedLines]
     ChangeProposal:
       type: object
       properties:

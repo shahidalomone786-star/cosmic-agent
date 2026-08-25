@@ -133,7 +133,7 @@ export type AgentToolDefinition = {
 
 const managerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status"]);
 const proposalTools = new Set(["create_proposal"]);
-const workerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status"]);
+const workerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "create_proposal"]);
 const reviewerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status"]);
 const validatorTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck", "run_build", "inspect_validation_result"]);
 const execFileAsync = promisify(execFile);
@@ -340,7 +340,7 @@ export async function executeAgentTool(
   }
   if (
     definition.permission === "approval_required" &&
-    role === "validator" && session.appliedProposalId === input.proposalId
+    role === "validator" && session.appliedProposalId !== input.proposalId
   ) {
     finishTrace("denied", "approval_required");
     addEvent(session, "approval_requested", "Approval gate held", `${name} cannot run until the matching human approval flow is completed.`);
@@ -449,6 +449,11 @@ export async function executeAgentTool(
   if (name === "create_proposal") {
     const paths = Array.isArray(input.paths) ? input.paths.filter((path): path is string => typeof path === "string") : [];
     result = await run(createChangeProposal(provider, session.activeModel, session.task, repository, uniquePaths(paths)));
+    const proposal = result as ChangeProposal;
+    registerProposal(proposal, session.repository, provider.id);
+    session.proposal = { proposalId: proposal.proposalId, files: proposal.files.map((file) => file.path), risk: proposal.risk, summary: proposal.summary };
+    session.proposalData = proposal;
+    proposalSessions.set(proposal.proposalId, session.id);
   }
   if (result === undefined) {
     finishTrace("failed", "unknown_tool");

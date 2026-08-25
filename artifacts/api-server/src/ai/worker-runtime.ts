@@ -13,11 +13,11 @@ export type WorkerRole = z.infer<typeof workerRoleSchema>;
 export const WORKER_CONTRACTS = {
   frontend: {
     specialties: ["React/components", "UI structure", "CSS/styling", "responsive behavior", "frontend state", "routing", "client-side API usage", "accessibility", "existing design system"],
-    tools: ["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck"],
+    tools: ["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "create_proposal", "run_typecheck"],
   },
   backend: {
     specialties: ["API routes", "server logic", "data flow", "server validation", "database interactions", "authentication integration", "provider integrations", "error handling"],
-    tools: ["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck"],
+    tools: ["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "create_proposal", "run_typecheck"],
   },
   reviewer: {
     specialties: ["requirements coverage", "scope review", "dependency verification", "conflict resolution", "security review", "evidence grounding"],

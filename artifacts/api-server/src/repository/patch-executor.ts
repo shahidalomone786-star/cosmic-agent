@@ -64,7 +64,7 @@ export class PatchExecutionError extends Error {
   }
 }
 
-type Snapshot = { relativePath: string; absolutePath: string; content: string };
+type Snapshot = { relativePath: string; absolutePath: string; content: string; exists: boolean };
 type Session = {
   proposal: ChangeProposal;
   repository?: RepositoryRef;
@@ -129,10 +129,20 @@ export async function executeProposal(proposalId: string, approvalId?: string): 
   for (const file of session.proposal.files) {
     const relativePath = safeRelative(file.path);
     const absolutePath = path.join(executionRoot, relativePath);
-    let current: string;
-    try { current = await fs.readFile(absolutePath, "utf8"); } catch { throw new PatchExecutionError("not_found", `File not found in the local execution workspace: ${relativePath}`); }
-    if (current !== file.originalCode) throw new PatchExecutionError("stale_file", "File changed since this proposal was generated. Please regenerate the proposal.");
-    snapshots.push({ relativePath, absolutePath, content: current });
+    let current = "";
+    let exists = true;
+    try {
+      current = await fs.readFile(absolutePath, "utf8");
+    } catch {
+      exists = false;
+    }
+    if (file.operation === "create") {
+      if (exists) throw new PatchExecutionError("stale_file", `New file already exists: ${relativePath}`);
+    } else {
+      if (!exists) throw new PatchExecutionError("not_found", `File not found in the local execution workspace: ${relativePath}`);
+      if (current !== file.originalCode) throw new PatchExecutionError("stale_file", "File changed since this proposal was generated. Please regenerate the proposal.");
+    }
+    snapshots.push({ relativePath, absolutePath, content: current, exists });
   }
   session.snapshots = snapshots;
   try {
@@ -258,6 +268,9 @@ function safeRelative(input: string): string {
 async function writeAtomically(files: ChangeProposal["files"], snapshots: Snapshot[]): Promise<void> {
   const tempFiles: string[] = [];
   try {
+    for (const snapshot of snapshots) {
+      await fs.mkdir(path.dirname(snapshot.absolutePath), { recursive: true });
+    }
     for (const file of files) {
       const snapshot = snapshots.find((item) => item.relativePath === safeRelative(file.path));
       if (!snapshot) throw new PatchExecutionError("invalid_proposal", "Proposal file snapshot mismatch.");
@@ -272,7 +285,11 @@ async function writeAtomically(files: ChangeProposal["files"], snapshots: Snapsh
 }
 
 async function restoreSnapshots(snapshots: Snapshot[]): Promise<void> {
-  await Promise.all(snapshots.map((snapshot) => fs.writeFile(snapshot.absolutePath, snapshot.content, "utf8")));
+  await Promise.all(snapshots.map((snapshot) =>
+    snapshot.exists
+      ? fs.writeFile(snapshot.absolutePath, snapshot.content, "utf8")
+      : fs.unlink(snapshot.absolutePath).catch(() => undefined),
+  ));
 }
 
 async function verifyValidatedFiles(session: Session): Promise<void> {
