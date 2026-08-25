@@ -595,7 +595,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       transitionAgentState(session, manager.classification.category === "COMPLEX" ? "REVIEWING" : "PROPOSING");
       reserveProviderBudget(session, Math.min(12_000, Math.max(1_000, session.task.length + session.context.approximateChars)));
       const proposal = await executeAgentTool(provider, session, "create_proposal", { repository: session.repository, paths: session.selectedFiles, request: session.task }) as ChangeProposal;
-      registerProposal(proposal, session.repository);
+      registerProposal(proposal, session.repository, provider.id);
       session.proposal = {
         proposalId: proposal.proposalId,
         files: proposal.files.map((file) => file.path),

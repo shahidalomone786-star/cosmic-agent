@@ -8,7 +8,7 @@ export interface AiChatMessage {
 export interface AiModel {
   id: string;
   displayName: string;
-  provider: "groq";
+  provider: "groq" | "gemini";
   capabilities: string[];
   contextWindow: number | null;
   enabled: boolean;
@@ -25,7 +25,7 @@ export interface AiChatResponse {
   id: string;
   model: string;
   content: string;
-  provider: "groq";
+  provider: "groq" | "gemini";
 }
 
 export interface ProviderHealth {
@@ -35,7 +35,7 @@ export interface ProviderHealth {
 }
 
 export interface AiProvider {
-  readonly id: "groq";
+  readonly id: "groq" | "gemini";
   chat(request: AiChatRequest): Promise<AiChatResponse>;
   stream(
     request: AiChatRequest,

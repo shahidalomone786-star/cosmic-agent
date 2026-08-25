@@ -68,6 +68,7 @@ type Snapshot = { relativePath: string; absolutePath: string; content: string };
 type Session = {
   proposal: ChangeProposal;
   repository?: RepositoryRef;
+  provider?: "groq" | "gemini";
   snapshots: Snapshot[];
   applied: boolean;
   undoAvailable: boolean;
@@ -92,7 +93,7 @@ const sessionsCommands = [
   { name: "api build", args: ["--filter", "@workspace/api-server", "run", "build"] },
 ];
 
-export function registerProposal(proposal: ChangeProposal, repository?: RepositoryRef): void {
+export function registerProposal(proposal: ChangeProposal, repository?: RepositoryRef, provider?: "groq" | "gemini"): void {
   if (proposal.files.length > MAX_FILES || proposal.addedLines > MAX_ADDED || proposal.removedLines > MAX_REMOVED || proposal.files.reduce((sum, file) => sum + Buffer.byteLength(file.originalCode) + Buffer.byteLength(file.proposedCode), 0) > MAX_TEXT_BYTES) {
     throw new PatchExecutionError("too_large", `Proposal exceeds safe limits: ${MAX_FILES} files, ${MAX_ADDED} added lines, ${MAX_REMOVED} removed lines, or ${MAX_TEXT_BYTES} bytes.`);
   }
@@ -102,12 +103,12 @@ export function registerProposal(proposal: ChangeProposal, repository?: Reposito
     if (binaryExtension.test(relative) || file.originalCode.includes("\0") || file.proposedCode.includes("\0")) throw new PatchExecutionError("binary_file", `Binary file edits are not supported: ${file.path}`);
     if (Buffer.byteLength(file.proposedCode) > MAX_TEXT_BYTES) throw new PatchExecutionError("too_large", `File exceeds the safe size limit: ${file.path}`);
   }
-  sessions.set(proposal.proposalId, { proposal, repository, snapshots: [], applied: false, undoAvailable: false, validated: false });
+  sessions.set(proposal.proposalId, { proposal, repository, provider, snapshots: [], applied: false, undoAvailable: false, validated: false });
 }
 
-export function getRegisteredProposal(proposalId: string): { proposal: ChangeProposal; repository?: RepositoryRef } | undefined {
+export function getRegisteredProposal(proposalId: string): { proposal: ChangeProposal; repository?: RepositoryRef; provider?: "groq" | "gemini" } | undefined {
   const session = sessions.get(proposalId);
-  return session ? { proposal: session.proposal, repository: session.repository } : undefined;
+  return session ? { proposal: session.proposal, repository: session.repository, provider: session.provider } : undefined;
 }
 
 export async function executeProposal(proposalId: string, approvalId?: string): Promise<ExecutionResult> {

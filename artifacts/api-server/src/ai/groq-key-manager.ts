@@ -28,12 +28,13 @@ export class GroqKeyManager {
   constructor(
     secrets: string[] = GroqKeyManager.readConfiguredSecrets(),
     private readonly cooldownMs = DEFAULT_COOLDOWN_MS,
+    private readonly providerPrefix = "groq",
   ) {
     this.keys = secrets
       .map((secret, index) => ({ secret: secret.trim(), index }))
       .filter(({ secret }) => Boolean(secret))
       .map(({ secret, index }) => ({
-        id: `groq-key-${index + 1}`,
+        id: `${providerPrefix}-key-${index + 1}`,
         secret,
         status: "healthy",
         rateLimitCount: 0,

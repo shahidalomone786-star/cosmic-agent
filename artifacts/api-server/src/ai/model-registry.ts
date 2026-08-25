@@ -41,10 +41,25 @@ export const GROQ_MODELS: readonly AiModel[] = [
   },
 ];
 
-const registry = new Map(GROQ_MODELS.map((model) => [model.id, model]));
+export const GEMINI_MODEL_ID = process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash";
+
+export const GEMINI_MODELS: readonly AiModel[] = [
+  {
+    id: GEMINI_MODEL_ID,
+    displayName: "Gemini 3.5 Flash",
+    provider: "gemini",
+    capabilities: ["coding", "reasoning"],
+    contextWindow: 1_048_576,
+    enabled: true,
+    recommended: true,
+  },
+];
+
+export const ALL_MODELS: readonly AiModel[] = [...GROQ_MODELS, ...GEMINI_MODELS];
+const registry = new Map(ALL_MODELS.map((model) => [model.id, model]));
 
 export function listEnabledModels(): AiModel[] {
-  return GROQ_MODELS.filter((model) => model.enabled).map((model) => ({
+  return ALL_MODELS.filter((model) => model.enabled).map((model) => ({
     ...model,
     capabilities: [...model.capabilities],
   }));

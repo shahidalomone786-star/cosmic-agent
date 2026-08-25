@@ -6,7 +6,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(v
 const isRepositoryRef = (value: unknown): value is RepositoryRef => isRecord(value) && typeof value.owner === "string" && typeof value.name === "string" && typeof value.branch === "string" && typeof value.defaultBranch === "string" && typeof value.id === "string" && typeof value.webUrl === "string";
 const sendError = (res: { status: (code: number) => { json: (value: unknown) => void } }, error: unknown) => {
   if (error instanceof RepositoryError) {
-    const status = error.code === "rate_limited" ? 429 : error.code === "permission_denied" ? 403 : ["repository_not_found", "branch_not_found", "file_not_found"].includes(error.code) ? 404 : ["network", "service_unavailable"].includes(error.code) ? 503 : error.code === "unsupported_binary" || error.code === "too_large" ? 422 : 400;
+    const status = error.code === "rate_limited" ? 429 : error.code === "permission_denied" ? 403 : ["repository_not_found", "branch_not_found", "file_not_found"].includes(error.code) ? 404 : ["network", "service_unavailable", "internal_route"].includes(error.code) ? 503 : error.code === "unsupported_binary" || error.code === "too_large" ? 422 : 400;
     res.status(status).json({ error: error.message, code: error.code }); return;
   }
   res.status(503).json({ error: "Repository access is temporarily unavailable.", code: "network" });

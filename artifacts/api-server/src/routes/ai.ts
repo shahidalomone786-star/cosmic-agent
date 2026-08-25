@@ -14,6 +14,7 @@ import { createChangeProposal, ProposalError, type ChangeProposal } from "../ai/
 import { commitProposal, executeProposal, getCommitReview, getPushReview, getRegisteredProposal, markProposalValidated, pushProposal, registerProposal, rejectAppliedProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
 import { GitHubWriteProviderError } from "../repository/github-write-provider";
 import { groqKeyManager } from "../ai/groq-key-manager";
+import { geminiKeyManager } from "../ai/gemini-key-manager";
 import { executeWorkerTool, getWorkerContext, validateWorkerReport, workerReportSchema, workerToolRequestSchema } from "../ai/worker-runtime";
 import { getGitHubResourceStatus } from "../repository/github-resource-manager";
 import { getContextResourceStatus, RETRY_CONTEXT_CHARS } from "../repository/context-manager";
@@ -31,7 +32,7 @@ router.post("/ai/agent/sessions/:sessionId/tools", async (req, res) => {
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
   const input = req.body?.input && typeof req.body.input === "object" ? req.body.input as Record<string, unknown> : {};
   if (!name) { res.status(400).json({ error: "A registered tool name is required.", code: "invalid_input" }); return; }
-  try { res.json(await requestAgentTool(providerManager.getProvider(), req.params.sessionId, name, input)); }
+  try { res.json(await requestAgentTool(providerForSession(req.params.sessionId), req.params.sessionId, name, input)); }
   catch (error) {
     if (error instanceof AgentToolError) { res.status(["approval_required", "permission_denied"].includes(error.code) ? 403 : error.code === "timeout" ? 504 : 400).json({ error: error.message, code: error.code }); return; }
     sendProviderError(res, error);
@@ -67,7 +68,7 @@ router.post("/ai/agent/sessions/:sessionId/workers/:role/tools", async (req, res
     return;
   }
   try {
-    const result = await executeWorkerTool(providerManager.getProvider(), req.params.sessionId, parsed.data.role, parsed.data.name, parsed.data.input);
+    const result = await executeWorkerTool(providerForSession(req.params.sessionId), req.params.sessionId, parsed.data.role, parsed.data.name, parsed.data.input);
     const session = getAgentSession(req.params.sessionId);
     const trace = session?.toolTraces.at(-1);
     res.json({ result, toolCallId: trace?.toolCallId, traceStatus: trace?.status });
@@ -109,7 +110,7 @@ router.post("/ai/agent/sessions", async (req, res) => {
     return;
   }
   try {
-    const session = await runAgentSession(providerManager.getProvider(), { task, model, repository: body.repository, paths });
+    const session = await runAgentSession(providerManager.getProviderForModel(model), { task, model, repository: body.repository, paths });
     res.status(201).json(session);
   } catch (error) {
     if (error instanceof AgentToolError) {
@@ -130,19 +131,22 @@ router.get("/ai/agent/sessions/:sessionId", (req, res) => {
 });
 
 router.get("/ai/models", (_req, res) => {
-  const provider = providerManager.getProvider();
-  res.json(ListAiModelsResponse.parse(provider.getModels()));
+  res.json(ListAiModelsResponse.parse(providerManager.getModels()));
 });
 
 router.get("/ai/resources", (_req, res) => {
-  const provider = providerManager.getProvider();
-  const health = provider.healthCheck();
-  const keyStatus = groqKeyManager.getStatus();
+  const groqStatus = groqKeyManager.getStatus();
+  const geminiStatus = geminiKeyManager.getStatus();
+  const keyStatus = {
+    configured: groqStatus.configured + geminiStatus.configured,
+    available: groqStatus.available + geminiStatus.available,
+    keys: [...groqStatus.keys, ...geminiStatus.keys],
+  };
   const github = getGitHubResourceStatus();
   res.json(GetAiResourcesResponse.parse({
     ai: {
-      provider: "groq",
-      status: health.available ? "healthy" : keyStatus.configured > 0 ? "limited" : "unavailable",
+      provider: "groq + gemini",
+      status: keyStatus.available > 0 ? "healthy" : keyStatus.configured > 0 ? "limited" : "unavailable",
       configuredKeyCount: keyStatus.configured,
       availableKeyCount: keyStatus.available,
       keys: keyStatus.keys.map(({ id, status, cooldownUntil, rateLimitCount }) => ({ id, status, cooldownUntil, rateLimitCount })),
@@ -160,7 +164,7 @@ router.post("/ai/change-proposal", async (req, res) => {
   }
 
   try {
-    const provider = providerManager.getProvider();
+    const provider = providerManager.getProviderForModel(parsed.data.model);
     const proposal = await createChangeProposal(
       provider,
       parsed.data.model,
@@ -168,7 +172,7 @@ router.post("/ai/change-proposal", async (req, res) => {
       parsed.data.repositoryContext.repository as RepositoryRef,
       parsed.data.repositoryContext.paths,
     );
-    registerProposal(proposal, parsed.data.repositoryContext.repository as RepositoryRef);
+    registerProposal(proposal, parsed.data.repositoryContext.repository as RepositoryRef, provider.id);
     res.json(CreateChangeProposalResponse.parse(proposal));
   } catch (error) {
     sendProposalError(res, error);
@@ -187,7 +191,10 @@ router.post("/ai/change-proposal/execute", async (req, res) => {
       res.status(422).json({ error: "The applied proposal could not be handed to the validator.", code: "validation_failed" });
       return;
     }
-    const validation = await validateAppliedProposal(providerManager.getProvider(), proposalId);
+    const validation = await validateAppliedProposal(
+      providerManager.getProvider(getRegisteredProposal(proposalId)?.provider ?? "groq"),
+      proposalId,
+    );
     if (validation.status !== "pass") {
       await rejectAppliedProposal(proposalId);
       recordAgentValidation(proposalId, { status: "validation_failed", message: validation.summary });
@@ -289,7 +296,7 @@ router.post("/ai/chat", async (req, res) => {
   }
 
   try {
-    const provider = providerManager.getProvider();
+    const provider = providerManager.getProviderForModel(parsed.data.model);
     let prepared = await withRepositoryContext(parsed.data);
     let result;
     try {
@@ -319,7 +326,7 @@ router.post("/ai/chat/stream", async (req, res) => {
   res.flushHeaders();
 
   try {
-    const provider = providerManager.getProvider();
+    const provider = providerManager.getProviderForModel(parsed.data.model);
     let prepared = await withRepositoryContext(parsed.data);
     let result;
     const emitToken = (token: string) => {
@@ -395,6 +402,12 @@ async function withRepositoryContext(request: PreparedAiRequest, contextBudget?:
 function publicProviderError(error: unknown): string {
   if (error instanceof GroqProviderError) return error.message;
   return "The AI provider is temporarily unavailable.";
+}
+
+function providerForSession(sessionId?: string) {
+  const session = sessionId ? getAgentSession(sessionId) : undefined;
+  const providerId = session?.provider === "gemini" ? "gemini" : "groq";
+  return providerManager.getProvider(providerId);
 }
 
 function sendProposalError(res: Response, error: unknown): void {

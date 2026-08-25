@@ -26,6 +26,7 @@ type RuntimeSession = AgentSession & { proposalData?: ChangeProposal };
 const fallbackModels: AiModel[] = [
   { id: 'openai/gpt-oss-120b', displayName: 'GPT OSS 120B', provider: 'groq', capabilities: ['coding', 'reasoning'], contextWindow: 131072, enabled: true, recommended: true },
   { id: 'openai/gpt-oss-20b', displayName: 'GPT OSS 20B', provider: 'groq', capabilities: ['coding', 'reasoning', 'fast'], contextWindow: 131072, enabled: true, recommended: false },
+  { id: 'gemini-3.5-flash', displayName: 'Gemini 3.5 Flash', provider: 'gemini', capabilities: ['coding', 'reasoning', 'fast'], contextWindow: 1048576, enabled: true, recommended: true },
 ];
 const promptSuggestions = [
   ['Explain this code', 'Walk me through a piece of code and highlight the most important decisions.'],
