@@ -8,11 +8,12 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "rm -rf test-dist && pnpm exec esbuild src/ai/evidence-verifier.ts --bundle --platform=node --format=esm --outfile=test-dist/evidence-verifier.mjs && pnpm exec esbuild src/ai/validation-runtime.ts --bundle --platform=node --format=esm --outfile=test-dist/validation-runtime.mjs && pnpm exec esbuild src/ai/approval-gate.ts --bundle --platform=node --format=esm --outfile=test-dist/approval-gate.mjs && pnpm exec esbuild src/repository/github-provider.ts --bundle --platform=node --format=esm --external:pino --external:pino-pretty --outfile=test-dist/github-provider.mjs && pnpm exec esbuild src/ai/gemini-provider.ts --bundle --platform=node --format=esm --external:pino --external:pino-pretty --outfile=test-dist/gemini-provider.mjs && node --test test/*.test.mjs"
+    "test": "rm -rf test-dist && pnpm exec esbuild src/ai/evidence-verifier.ts --bundle --platform=node --format=esm --outfile=test-dist/evidence-verifier.mjs && pnpm exec esbuild src/ai/validation-runtime.ts --bundle --platform=node --format=esm --outfile=test-dist/validation-runtime.mjs && pnpm exec esbuild src/ai/approval-gate.ts --bundle --platform=node --format=esm --outfile=test-dist/approval-gate.mjs && pnpm exec esbuild src/repository/github-response.ts --bundle --platform=node --format=esm --outfile=test-dist/github-response.mjs && pnpm exec esbuild src/lib/github-crypto.ts --bundle --platform=node --format=esm --outfile=test-dist/github-crypto.mjs && pnpm exec esbuild src/ai/gemini-provider.ts --bundle --platform=node --format=esm --external:pino --external:pino-pretty --outfile=test-dist/gemini-provider.mjs && node --test test/*.test.mjs"
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
+    "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "drizzle-orm": "catalog:",

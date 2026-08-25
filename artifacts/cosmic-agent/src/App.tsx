@@ -12,6 +12,7 @@ import {
   Aperture, Bot, Check, ChevronDown, CircleAlert, CircleCheck, Code2, Copy, Gauge, LockKeyhole, Menu, MoreHorizontal,
   FileCode2,
   Activity, GitBranch, Pencil, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Terminal, Trash2, Wrench, X, Square,
+  Github, KeyRound, LoaderCircle, LogIn, LogOut, Settings as SettingsIcon,
 } from 'lucide-react';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
@@ -22,6 +23,8 @@ type ContextUsage = { paths: string[]; sources: UsedSource[]; warnings?: string[
 type ChatMessage = { id: string; role: Role; content: string; createdAt: number; error?: boolean; streaming?: boolean; repositoryContext?: ContextUsage };
 type Conversation = { id: string; title: string; modelId: string; messages: ChatMessage[]; updatedAt: number };
 type RuntimeSession = AgentSession & { proposalData?: ChangeProposal };
+type SessionUser = { id: string; email: string };
+type GitHubStatus = { connected: boolean; status: 'connected' | 'invalid' | 'rate_limited' | 'unavailable' | 'not_connected'; lastValidatedAt?: string | null };
 
 const fallbackModels: AiModel[] = [
   { id: 'openai/gpt-oss-120b', displayName: 'GPT OSS 120B', provider: 'groq', capabilities: ['coding', 'reasoning'], contextWindow: 131072, enabled: true, recommended: true },
@@ -76,7 +79,55 @@ function inlineMarkdown(text: string) {
   return pieces.map((part, i) => part.startsWith('`') ? <code key={i}>{part.slice(1, -1)}</code> : part.startsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : part);
 }
 
-function Home() {
+async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(url, { credentials: 'include', ...options });
+  const body = await response.json().catch(() => null) as { error?: string } | T | null;
+  if (!response.ok) throw new Error(body && typeof body === 'object' && 'error' in body ? body.error : 'Request failed.');
+  return body as T;
+}
+
+function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: SessionUser) => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setError(''); setBusy(true);
+    try {
+      const result = await apiJson<{ user: SessionUser }>(`/api/auth/${mode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      onAuthenticated(result.user);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not authenticate.'); }
+    finally { setBusy(false); }
+  };
+  return <main className="auth-shell"><section className="auth-card">
+    <div className="auth-brand"><div className="brand-mark"><Aperture size={17} /></div><span>Cosmic Agent</span></div>
+    <div className="auth-heading"><span className="repo-kicker"><LogIn size={12} /> Private workspace</span><h1>{mode === 'login' ? 'Welcome back' : 'Create your workspace'}</h1><p>{mode === 'login' ? 'Sign in to continue your private, reviewable coding sessions.' : 'Create an account to keep your sessions and integrations private.'}</p></div>
+    <form className="auth-form" onSubmit={submit}><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={8} required /></label>{error && <div className="auth-error" role="alert">{error}</div>}<button className="auth-submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={15} /> : <LogIn size={15} />}{mode === 'login' ? 'Sign in' : 'Register'}</button></form>
+    <button className="auth-switch" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}>{mode === 'login' ? 'Need an account? Register' : 'Already have an account? Sign in'}</button>
+  </section></main>;
+}
+
+function GitHubSettings({ onClose, notify }: { onClose: () => void; notify: (message: string) => void }) {
+  const [status, setStatus] = useState<GitHubStatus | null>(null);
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const refresh = async () => { try { setStatus(await apiJson<GitHubStatus>('/api/settings/github')); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load GitHub status.'); } };
+  useEffect(() => { void refresh(); }, []);
+  const save = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setError('');
+    try { const next = await apiJson<GitHubStatus>('/api/settings/github', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) }); setStatus(next); setToken(''); notify('GitHub connected securely.'); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save GitHub token.'); }
+    finally { setBusy(false); }
+  };
+  const validate = async () => { setBusy(true); setError(''); try { const next = await apiJson<GitHubStatus>('/api/settings/github/validate', { method: 'POST' }); setStatus(next); notify(next.status === 'connected' ? 'GitHub token is valid.' : `GitHub status: ${next.status.replace('_', ' ')}`); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not validate GitHub token.'); } finally { setBusy(false); } };
+  const remove = async () => { setBusy(true); setError(''); try { setStatus(await apiJson<GitHubStatus>('/api/settings/github', { method: 'DELETE' })); notify('GitHub disconnected.'); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not remove GitHub token.'); } finally { setBusy(false); } };
+  const label = status?.status === 'not_connected' || !status ? 'Not Connected' : status.status === 'rate_limited' ? 'Rate Limited' : status.status === 'invalid' ? 'Invalid' : status.status === 'unavailable' ? 'Unavailable' : 'Connected';
+  return <aside className="settings-panel"><div className="settings-head"><div><span className="repo-kicker"><SettingsIcon size={12} /> Settings</span><strong>Integrations</strong></div><button className="icon-button" onClick={onClose} aria-label="Close settings"><X size={17} /></button></div><div className="settings-content"><div className="integration-title"><Github size={22} /><div><strong>GitHub</strong><small>Repository access for private projects</small></div><span className={`integration-status ${status?.status ?? 'not_connected'}`}>{label}</span></div><form className="github-form" onSubmit={save}><label>GitHub Personal Access Token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="ghp_••••••••••••" autoComplete="off" required /></label><small className="settings-note"><KeyRound size={13} /> Encrypted on the server. It never appears in responses, logs, or agent context.</small><div className="settings-actions"><button className="settings-primary" disabled={busy || !token.trim()}>{busy ? <LoaderCircle className="spin" size={14} /> : null}Save</button>{status?.status !== 'not_connected' && <><button type="button" className="settings-button" onClick={() => void validate()} disabled={busy}>Validate</button><button type="button" className="settings-danger" onClick={() => void remove()} disabled={busy}>Remove</button></>}</div></form>{error && <div className="auth-error" role="alert">{error}</div>}</div></aside>;
+}
+
+function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
   const { data: providerModels } = useListAiModels();
   const models = providerModels?.filter((model) => model.enabled) ?? fallbackModels;
   const [conversations, setConversations] = useState<Conversation[]>(readConversations);
@@ -99,6 +150,7 @@ function Home() {
   const [contextPaths, setContextPaths] = useState<string[]>([]);
   const [repositoryOpen, setRepositoryOpen] = useState(false);
   const [resourceOpen, setResourceOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -230,7 +282,7 @@ function Home() {
         {editingId === conversation.id ? <input autoFocus defaultValue={conversation.title} onBlur={(event) => { const value = event.target.value.trim(); if (value) setConversations((current) => current.map((item) => item.id === conversation.id ? { ...item, title: value } : item)); setEditingId(''); }} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} /> : <button className="history-main" onClick={() => selectConversation(conversation.id)}><span>{conversation.title}</span><small>{conversation.messages.length ? `${conversation.messages.length} messages` : 'Empty chat'}</small></button>}
         <div className="history-actions"><button onClick={() => { setEditingId(conversation.id); }} aria-label={`Rename ${conversation.title}`}><Pencil size={13} /></button><button onClick={() => deleteConversation(conversation.id)} aria-label={`Delete ${conversation.title}`}><Trash2 size={13} /></button></div>
       </div>) : <div className="history-empty">{search ? 'No matching chats' : 'Your conversations will appear here.'}</div>}</div>
-      <div className="sidebar-bottom"><button className="clear-history" onClick={() => { if (window.confirm('Clear all conversation history?')) { setConversations([]); setActiveId(''); notify('Conversation history cleared'); } }}><Trash2 size={15} /> Clear history</button><div className="sidebar-account"><div className="account-avatar">AR</div><div><strong>Avery Rowan</strong><small>Workspace owner</small></div><MoreHorizontal size={16} /></div></div>
+       <div className="sidebar-bottom"><button className="clear-history" onClick={() => { if (window.confirm('Clear all conversation history?')) { setConversations([]); setActiveId(''); notify('Conversation history cleared'); } }}><Trash2 size={15} /> Clear history</button><div className="sidebar-account"><div className="account-avatar">{user.email.slice(0, 2).toUpperCase()}</div><div><strong>{user.email}</strong><small>Private workspace</small></div><button className="account-menu-button" onClick={() => setSettingsOpen(true)} aria-label="Open settings"><SettingsIcon size={15} /></button><button className="account-menu-button" onClick={() => void apiJson('/api/auth/logout', { method: 'POST' }).then(onLogout)} aria-label="Sign out"><LogOut size={15} /></button></div></div>
     </aside>
     {sidebarOpen && <button className="drawer-overlay" onClick={() => setSidebarOpen(false)} aria-label="Close sidebar" />}
      <main className="chat-main">
@@ -243,6 +295,7 @@ function Home() {
     <RepositoryPanel open={repositoryOpen} repository={repository} onRepositoryChange={(next) => { setRepository(next); if (!next) setContextPaths([]); }} contextPaths={contextPaths} onAddContext={(path) => setContextPaths((current) => current.includes(path) ? current : [...current, path])} onRemoveContext={(path) => setContextPaths((current) => current.filter((item) => item !== path))} onClose={() => setRepositoryOpen(false)} />
      {resourceOpen && <button className="drawer-overlay resource-overlay" onClick={() => setResourceOpen(false)} aria-label="Close resource status" />}
      <ResourceStatusPanel open={resourceOpen} onClose={() => setResourceOpen(false)} />
+     {settingsOpen && <><button className="drawer-overlay settings-overlay" onClick={() => setSettingsOpen(false)} aria-label="Close settings" /><GitHubSettings onClose={() => setSettingsOpen(false)} notify={notify} /></>}
     {toast && <div className="toast-note" role="status">{toast}</div>}
   </div>;
 }
@@ -332,6 +385,13 @@ function MessageBubble({ message, onRetry, onEdit }: { message: ChatMessage; onR
 }
 function friendlyError(message: string) { const lower = message.toLowerCase(); if (lower.includes('rate') || lower.includes('limit')) return 'The provider is temporarily busy. Please wait a moment and try again.'; if (lower.includes('unavailable') || lower.includes('configured')) return 'This model is unavailable right now. Try another model from the selector.'; return 'We could not reach the provider. Check your connection and try again.'; }
 function isCodingRequest(text: string) { return /^(fix|add|change|update|remove|refactor|implement|make|improve|replace|rename|create)\b/i.test(text.trim()) || /\b(bug|feature|component|screen|login|patch|edit)\b/i.test(text); }
-function Router() { return <ErrorBoundary><Switch><Route path="/" component={Home} /><Route component={NotFound} /></Switch></ErrorBoundary>; }
-function App() { return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router /></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>; }
+function Router({ user, onLogout }: { user: SessionUser; onLogout: () => void }) { return <ErrorBoundary><Switch><Route path="/" component={() => <Home user={user} onLogout={onLogout} />} /><Route component={NotFound} /></Switch></ErrorBoundary>; }
+function App() {
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [checking, setChecking] = useState(true);
+  useEffect(() => { void apiJson<{ user: SessionUser }>('/api/auth/me').then((result) => setUser(result.user)).catch(() => setUser(null)).finally(() => setChecking(false)); }, []);
+  const logout = () => { setUser(null); queryClient.clear(); };
+  if (checking) return <main className="auth-shell"><LoaderCircle className="spin" size={22} /></main>;
+  return <QueryClientProvider client={queryClient}><TooltipProvider>{user ? <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router user={user} onLogout={logout} /></WouterRouter> : <AuthScreen onAuthenticated={setUser} />}<Toaster /></TooltipProvider></QueryClientProvider>;
+}
 export default App;

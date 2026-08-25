@@ -21,8 +21,20 @@ import { getContextResourceStatus, RETRY_CONTEXT_CHARS } from "../repository/con
 import { reviewProposal, reviewRequestSchema } from "../ai/reviewer-runtime";
 import { validateAppliedProposal } from "../ai/validator-runtime";
 import { approveProposal, ApprovalGateError, approvalRequestSchema } from "../ai/approval-gate";
+import { requireAuthenticatedUser } from "../middlewares/auth-middleware";
 
 const router: IRouter = Router();
+router.use((req, res, next) => {
+  if (!req.path.startsWith("/ai/")) {
+    next();
+    return;
+  }
+  if (req.path === "/ai/models" || req.path === "/ai/resources") {
+    next();
+    return;
+  }
+  if (requireAuthenticatedUser(req, res)) next();
+});
 
 router.get("/ai/agent/tools", (_req, res) => {
   res.json(getAgentToolDefinitions());
@@ -230,11 +242,8 @@ router.post("/ai/change-proposal/approve", (req, res) => {
     return;
   }
   const proposalId = parsed.data.proposalId.trim();
-  const userId = typeof req.headers["x-cosmic-user-id"] === "string" ? req.headers["x-cosmic-user-id"] : "";
-  if (!userId) {
-    res.status(401).json({ error: "An authenticated user approval is required.", code: "unauthenticated" });
-    return;
-  }
+  const userId = req.authUser?.id;
+  if (!userId) return;
   const session = getAgentSessionForProposal(proposalId);
   const registered = getRegisteredProposal(proposalId);
   if (!registered) {

@@ -1,6 +1,8 @@
 import { logger } from "../lib/logger";
 import { recordCacheHit, recordCacheMiss, recordGitHubResponse, getGitHubResourceStatus } from "./github-resource-manager";
 import { chunkContext, getContextResourceStatus, MAX_CONTEXT_CHARS, recordContextStatus } from "./context-manager";
+import { getCurrentAuthUser } from "../middlewares/auth-middleware";
+import { getGitHubCredential, updateGitHubCredentialStatus, type GitHubCredentialStatus } from "../lib/github-credentials";
 
 export type RepositoryRef = {
   id: string;
@@ -128,7 +130,7 @@ export function parseGitHubUrl(value: string): { owner: string; name: string } {
   return { owner, name };
 }
 
-async function githubFetch<T>(path: string, notFoundMessage: string): Promise<T> {
+async function githubFetch<T>(path: string, notFoundMessage: string, tokenOverride?: string): Promise<T> {
   const apiRoute = path.split("?", 1)[0];
   const diagnostic = {
     normalizedRepositoryUrl: repositoryUrlForApiRoute(apiRoute),
@@ -140,7 +142,10 @@ async function githubFetch<T>(path: string, notFoundMessage: string): Promise<T>
       Accept: "application/vnd.github+json",
       "User-Agent": "Cosmic-Agent-Read-Only",
     };
-    if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
+    const currentUser = getCurrentAuthUser();
+    const personalCredential = tokenOverride === undefined && currentUser ? await getGitHubCredential(currentUser.id) : undefined;
+    const token = tokenOverride ?? personalCredential?.token ?? GITHUB_TOKEN;
+    if (token) headers.Authorization = `Bearer ${token}`;
     const response = await fetch(`${GITHUB_API}${path}`, { headers });
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     const rawBody = await response.text();
@@ -152,7 +157,10 @@ async function githubFetch<T>(path: string, notFoundMessage: string): Promise<T>
       throw new RepositoryError("internal_route", "The repository service received an unexpected HTML response instead of GitHub API data.");
     }
     const rateRemaining = response.headers.get("x-ratelimit-remaining");
-    if (response.status === 401) throw new RepositoryError("permission_denied", "GitHub authorization was rejected. Public repositories do not require a token.");
+     if (response.status === 401) {
+       if (currentUser && tokenOverride === undefined && personalCredential) await updateGitHubCredentialStatus(currentUser.id, "invalid", false);
+       throw new RepositoryError("permission_denied", "GitHub authorization was rejected. Public repositories do not require a token.");
+     }
     if (response.status === 403 || response.status === 429) {
       const isRateLimit = response.status === 429 || rateRemaining === "0" || /rate limit/i.test(responseBody?.message ?? "");
       throw new RepositoryError(isRateLimit ? "rate_limited" : "permission_denied", isRateLimit ? "GitHub API rate limit reached. Please try again later." : "GitHub denied access to this repository.");
@@ -165,6 +173,19 @@ async function githubFetch<T>(path: string, notFoundMessage: string): Promise<T>
     if (error instanceof RepositoryError) throw error;
     logger.warn({ ...diagnostic, category: "network" }, "GitHub read request failed");
     throw new RepositoryError("network", "GitHub service unavailable. Please try again later.");
+  }
+}
+
+export async function validateGitHubToken(token: string): Promise<{ status: GitHubCredentialStatus }> {
+  try {
+    await githubFetch<{ login: string }>("/user", "GitHub authorization was rejected.", token);
+    return { status: "connected" };
+  } catch (error) {
+    if (error instanceof RepositoryError) {
+      if (error.code === "rate_limited") return { status: "rate_limited" };
+      if (error.code === "permission_denied") return { status: "invalid" };
+    }
+    return { status: "unavailable" };
   }
 }
 
@@ -196,6 +217,10 @@ export function classifyGitHubResponse(
   return status >= 200 && status < 300 ? "ok" : "network";
 }
 
+export function repositoryCacheScope(): string {
+  return getCurrentAuthUser()?.id ?? (GITHUB_TOKEN ? "process-credential" : "anonymous");
+}
+
 function repositoryUrlForApiRoute(apiRoute: string): string {
   const match = apiRoute.match(/^\/repos\/([^/]+)\/([^/]+)/);
   if (!match) return "https://github.com/unknown/unknown";
@@ -204,7 +229,7 @@ function repositoryUrlForApiRoute(apiRoute: string): string {
 
 export async function connectRepository(url: string, branch?: string): Promise<RepositoryRef> {
   const { owner, name } = parseGitHubUrl(url);
-  const metadataKey = `${owner}/${name}`;
+  const metadataKey = `${repositoryCacheScope()}:${owner}/${name}`;
   const cachedMetadata = METADATA_CACHE.get(metadataKey);
   const repo = cachedMetadata && cachedMetadata.expiresAt > Date.now()
     ? (recordCacheHit(), cachedMetadata.repo)
@@ -463,7 +488,7 @@ async function getRepositoryTree(repository: RepositoryRef): Promise<GitHubTreeE
 }
 
 function repositoryCacheKey(repository: RepositoryRef, path = ""): string {
-  return `${repository.owner}/${repository.name}#${repository.branch}${path ? `/${path}` : ""}`;
+  return `${repositoryCacheScope()}:${repository.owner}/${repository.name}#${repository.branch}${path ? `/${path}` : ""}`;
 }
 
 function classifyFile(path: string, content = ""): RepositoryFileCategory {

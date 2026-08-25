@@ -4713,6 +4713,7 @@ var CreateChangeProposalResponse = objectType({
   "risk": enumType(["LOW", "MEDIUM", "HIGH"]),
   "files": arrayType(objectType({
     "path": stringType(),
+    "operation": enumType(["create", "edit"]),
     "language": stringType(),
     "originalCode": stringType(),
     "proposedCode": stringType(),

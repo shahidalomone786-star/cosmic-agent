@@ -1,7 +1,15 @@
 import { Router, type IRouter } from "express";
 import { connectRepository, getRepositoryOverview, listTree, readRepositoryFile, searchRepository, RepositoryError, type RepositoryRef } from "../repository/github-provider";
+import { requireAuthenticatedUser } from "../middlewares/auth-middleware";
 
 const router: IRouter = Router();
+router.use((req, res, next) => {
+  if (!req.path.startsWith("/repository/")) {
+    next();
+    return;
+  }
+  if (requireAuthenticatedUser(req, res)) next();
+});
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === "object");
 const isRepositoryRef = (value: unknown): value is RepositoryRef => isRecord(value) && typeof value.owner === "string" && typeof value.name === "string" && typeof value.branch === "string" && typeof value.defaultBranch === "string" && typeof value.id === "string" && typeof value.webUrl === "string";
 const sendError = (res: { status: (code: number) => { json: (value: unknown) => void } }, error: unknown) => {

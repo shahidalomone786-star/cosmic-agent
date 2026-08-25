@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyGitHubResponse, parseGitHubUrl } from "../test-dist/github-provider.mjs";
+import { classifyGitHubResponse, parseGitHubUrl } from "../test-dist/github-response.mjs";
 
 test("accepts canonical GitHub repository URLs only", () => {
   assert.deepEqual(parseGitHubUrl("https://github.com/shahidalomone786-star/cosmic-ocean-v2"), {
