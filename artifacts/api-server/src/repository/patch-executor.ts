@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -83,7 +84,16 @@ const MAX_FILES = Number(process.env.COSMIC_MAX_PROPOSAL_FILES ?? 20);
 const MAX_ADDED = Number(process.env.COSMIC_MAX_ADDED_LINES ?? 5_000);
 const MAX_REMOVED = Number(process.env.COSMIC_MAX_REMOVED_LINES ?? 5_000);
 const MAX_TEXT_BYTES = Number(process.env.COSMIC_MAX_MODIFIED_BYTES ?? 500_000);
-const executionRoot = path.resolve(process.env.COSMIC_EXECUTION_ROOT ?? process.cwd());
+function findWorkspaceRoot(start = process.cwd()): string {
+  let current = path.resolve(start);
+  while (true) {
+    if (existsSync(path.join(current, "pnpm-workspace.yaml"))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(start);
+    current = parent;
+  }
+}
+const executionRoot = path.resolve(process.env.COSMIC_EXECUTION_ROOT ?? findWorkspaceRoot());
 const sessions = new Map<string, Session>();
 const protectedPath = /(^|\/)(\.env(?:\..*)?|\.git|node_modules|credentials?|secrets?)(\/|$)|(^|\/).*?\.(pem|key|p12|pfx|crt)$/i;
 const protectedAuth = /(^|\/)(authStore|AuthContext)\.(ts|tsx|js|jsx)$/;

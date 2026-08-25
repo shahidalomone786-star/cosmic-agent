@@ -35,6 +35,10 @@ function eligible(proposalId: string) {
   if (!isProposalPreviewable(proposalId)) throw new Error("Preview is available only after explicit approval and successful validation.");
   return registered;
 }
+function previewUrl(proposalId: string, files: string[] = []) {
+  const game = files.find((file) => /cosmic-racing-game\.html$/i.test(file));
+  return `/api/preview/${encodeURIComponent(proposalId)}/${game ? "cosmic-racing-game.html" : ""}`;
+}
 async function waitForPort(port: number, timeoutMs = 18_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -62,7 +66,7 @@ export async function startPreview(proposalId: string): Promise<PreviewStatus> {
     existing.process.kill("SIGTERM");
   }
   const item: PreviewProcess = {
-    proposalId, state: "starting", url: `/api/preview/${encodeURIComponent(proposalId)}/`,
+    proposalId, state: "starting", url: previewUrl(proposalId, eligible(proposalId).proposal.files.map((file) => file.path)),
     command: `pnpm ${previewCommand.join(" ")}`, output: "", port: PREVIEW_PORT, updatedAt: now(), startedAt: now(),
   };
   previews.set(proposalId, item);
@@ -100,9 +104,9 @@ export async function startPreview(proposalId: string): Promise<PreviewStatus> {
 }
 
 export function getPreview(proposalId: string): PreviewStatus {
-  eligible(proposalId);
+  const registered = eligible(proposalId);
   const item = previews.get(proposalId);
-  if (!item) return { proposalId, state: "stopped", url: `/api/preview/${encodeURIComponent(proposalId)}/`, command: `pnpm ${previewCommand.join(" ")}`, output: "", updatedAt: now() };
+  if (!item) return { proposalId, state: "stopped", url: previewUrl(proposalId, registered.proposal.files.map((file) => file.path)), command: `pnpm ${previewCommand.join(" ")}`, output: "", updatedAt: now() };
   return publicStatus(item);
 }
 export async function stopPreview(proposalId: string): Promise<PreviewStatus> {

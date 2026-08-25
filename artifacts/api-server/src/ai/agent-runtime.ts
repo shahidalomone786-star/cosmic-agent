@@ -511,7 +511,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
     maxIterations: MAX_AGENT_ITERATIONS,
     plan: plan(),
     repository: input.repository,
-    selectedFiles: uniquePaths(input.paths),
+    selectedFiles: uniquePaths([...input.paths ?? [], ...inferredCreatePaths(task)]),
     discoveredFiles: [],
     selectedTools: selectTools(task, Boolean(input.repository)),
     activeModel: input.model,
@@ -614,7 +614,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       addEvent(session, "tool_called", "Calling create_proposal", "Proposal-only generation; no repository write is permitted.");
       transitionAgentState(session, manager.classification.category === "COMPLEX" ? "REVIEWING" : "PROPOSING");
       reserveProviderBudget(session, Math.min(12_000, Math.max(1_000, session.task.length + session.context.approximateChars)));
-      const proposal = await executeAgentTool(provider, session, "create_proposal", { repository: session.repository, paths: session.selectedFiles, request: session.task }) as ChangeProposal;
+       const proposal = await executeAgentTool(provider, session, "create_proposal", { repository: session.repository, paths: session.selectedFiles, request: session.task }) as ChangeProposal;
       registerProposal(proposal, session.repository, provider.id);
       session.proposal = {
         proposalId: proposal.proposalId,
@@ -790,4 +790,9 @@ function selectTools(task: string, hasRepository: boolean): string[] {
   const tools = ["repository_status", "analyze_repository", "file_context", "create_proposal"];
   if (/\b(search|find|where|locate|auth|route|redirect|error)\b/i.test(task)) tools.splice(1, 0, "repository_search");
   return tools;
+}
+
+function inferredCreatePaths(task: string): string[] {
+  if (/\bracing game\b/i.test(task)) return ["artifacts/cosmic-agent/public/cosmic-racing-game.html"];
+  return [];
 }
