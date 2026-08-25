@@ -7,3 +7,4 @@
 - [Canonical validator boundary](canonical-validator-boundary.md) — Only validator-owned completed typecheck/build traces can establish pass or fail.
 - [Approval binding](approval-binding.md) — Repository writes require server-held authorization bound to the exact proposal and repository snapshot.
 - [Route middleware namespaces](route-middleware-namespaces.md) — Scope router-level guards before rejecting requests or earlier routers can intercept unrelated endpoints.
+- [Git approval boundary](git-approval-boundary.md) — Keep apply, commit, and push approvals distinct and server-bound.

@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ProposalApprovalAction } from './proposalApprovalAction';
 import type { ProposalApprovalFileHashes } from './proposalApprovalFileHashes';
 
 export interface ProposalApproval {
@@ -16,4 +17,5 @@ export interface ProposalApproval {
   fileHashes: ProposalApprovalFileHashes;
   approvedAt: string;
   approvedByUser: string;
+  action: ProposalApprovalAction;
 }

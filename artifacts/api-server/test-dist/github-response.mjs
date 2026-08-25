@@ -26,7 +26,20 @@ function classifyGitHubResponse(status, contentType, rawBody, responseBody) {
   if (status >= 500) return "service_unavailable";
   return status >= 200 && status < 300 ? "ok" : "network";
 }
+function classifyGitHubCredentialStatus(status, contentType, rawBody, responseBody) {
+  switch (classifyGitHubResponse(status, contentType, rawBody, responseBody)) {
+    case "ok":
+      return "connected";
+    case "permission_denied":
+      return "invalid";
+    case "rate_limited":
+      return "rate_limited";
+    default:
+      return "unavailable";
+  }
+}
 export {
+  classifyGitHubCredentialStatus,
   classifyGitHubResponse,
   parseGitHubUrl
 };

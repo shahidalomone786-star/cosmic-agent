@@ -9,6 +9,10 @@
 export interface CommitChangeProposalInput {
   /** @minLength 1 */
   proposalId: string;
+  /** @minLength 1 */
+  approvalId: string;
+  /** @minLength 1 */
+  applyApprovalId: string;
   /**
      * @minLength 1
      * @maxLength 200

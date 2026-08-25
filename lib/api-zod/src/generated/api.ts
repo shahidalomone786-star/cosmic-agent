@@ -883,7 +883,8 @@ export const PostAiChangeProposalApproveResponse = zod.object({
   "repositorySha": zod.string(),
   "fileHashes": zod.record(zod.string(), zod.string()),
   "approvedAt": zod.string(),
-  "approvedByUser": zod.string()
+  "approvedByUser": zod.string(),
+  "action": zod.enum(['apply', 'commit', 'push'])
 })
 
 
@@ -941,12 +942,16 @@ export const GetChangeProposalCommitReviewResponse = zod.object({
  * @summary Commit an approved validated local change
  */
 
+
+
 export const commitChangeProposalBodyMessageMax = 200;
 
 
 
 export const CommitChangeProposalBody = zod.object({
   "proposalId": zod.string().min(1),
+  "approvalId": zod.string().min(1),
+  "applyApprovalId": zod.string().min(1),
   "message": zod.string().min(1).max(commitChangeProposalBodyMessageMax)
 })
 

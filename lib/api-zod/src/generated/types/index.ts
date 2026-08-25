@@ -69,6 +69,7 @@ export * from './proposalActionInput';
 export * from './proposalActionResult';
 export * from './proposalActionResultStatus';
 export * from './proposalApproval';
+export * from './proposalApprovalAction';
 export * from './proposalApprovalFileHashes';
 export * from './providerBudget';
 export * from './providerBudgetStatus';

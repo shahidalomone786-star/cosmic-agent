@@ -21,7 +21,10 @@ router.post("/auth/register", async (req, res): Promise<void> => {
     res.cookie(SESSION_COOKIE, sessionId, cookieOptions());
     res.status(201).json({ user });
   } catch (error) {
-    if (error instanceof Error && /unique|duplicate/i.test(error.message)) {
+    const databaseCode = error && typeof error === "object" && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+    if ((error instanceof Error && /unique|duplicate/i.test(error.message)) || databaseCode === "23505") {
       res.status(409).json({ error: "An account with that email already exists." });
       return;
     }

@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Response } from "express";
-import { AgentToolError, beginProposalValidation, getAgentSession, getAgentSessionForProposal, getAgentToolDefinitions, requestAgentTool, recordAgentValidation, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
+import { AgentToolError, beginProposalValidation, getAgentSession, getAgentSessionForProposal, getAgentToolDefinitions, requestAgentTool, recordAgentValidation, recordServerToolTrace, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
 import {
   SendAiMessageBody,
   SendAiMessageResponse,
@@ -11,7 +11,7 @@ import { GroqProviderError } from "../ai/groq-provider";
 import { retrieveRepositoryContext, type RepositoryContextResult, type RepositoryRef } from "../repository/github-provider";
 import { CreateChangeProposalBody, CreateChangeProposalResponse } from "@workspace/api-zod";
 import { createChangeProposal, ProposalError, type ChangeProposal } from "../ai/change-proposal";
-import { commitProposal, executeProposal, getCommitReview, getPushReview, getRegisteredProposal, markProposalValidated, pushProposal, registerProposal, rejectAppliedProposal, undoProposal, PatchExecutionError } from "../repository/patch-executor";
+import { commitProposal, executeProposal, getCommitReview, getPushReview, getRegisteredProposal, markProposalValidated, pushProposal, registerProposal, rejectAppliedProposal, undoProposal, stageProposal, PatchExecutionError } from "../repository/patch-executor";
 import { GitHubWriteProviderError } from "../repository/github-write-provider";
 import { groqKeyManager } from "../ai/groq-key-manager";
 import { geminiKeyManager } from "../ai/gemini-key-manager";
@@ -251,7 +251,7 @@ router.post("/ai/change-proposal/approve", (req, res) => {
     return;
   }
   try {
-    res.json(approveProposal(registered.proposal, registered.repository, userId, session?.id));
+     res.json(approveProposal(registered.proposal, registered.repository, userId, session?.id, parsed.data.action));
   } catch (error) {
     if (error instanceof ApprovalGateError) {
       res.status(400).json({ error: error.message, code: error.code });
@@ -280,9 +280,20 @@ router.post("/ai/change-proposal/commit-review", async (req, res) => {
 
 router.post("/ai/change-proposal/commit", async (req, res) => {
   const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
+  const approvalId = typeof req.body?.approvalId === "string" ? req.body.approvalId.trim() : "";
   const message = typeof req.body?.message === "string" ? req.body.message : "";
   if (!proposalId) { res.status(400).json({ error: "Commit approval requires a valid proposal.", code: "invalid_proposal" }); return; }
-  try { res.json(await commitProposal(proposalId, message)); } catch (error) { sendExecutionError(res, error); }
+  try {
+    const applyApprovalId = typeof req.body?.applyApprovalId === "string" ? req.body.applyApprovalId : "";
+    await stageProposal(proposalId, applyApprovalId);
+    recordServerToolTrace(getAgentSessionForProposal(proposalId)?.id, "git_stage_proposed_changes", "completed", { proposalId }, "Only approved proposal files staged.");
+    const result = await commitProposal(proposalId, approvalId, message);
+    recordServerToolTrace(getAgentSessionForProposal(proposalId)?.id, "git_commit", "completed", { proposalId }, "Commit object created; branch not pushed.");
+    res.json(result);
+  } catch (error) {
+    recordServerToolTrace(getAgentSessionForProposal(proposalId)?.id, "git_commit", "denied", { proposalId }, undefined, error instanceof Error ? error.name : "git_commit_failed");
+    sendExecutionError(res, error);
+  }
 });
 
 router.post("/ai/change-proposal/push-review", async (req, res) => {
@@ -293,8 +304,16 @@ router.post("/ai/change-proposal/push-review", async (req, res) => {
 
 router.post("/ai/change-proposal/push", async (req, res) => {
   const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
+  const approvalId = typeof req.body?.approvalId === "string" ? req.body.approvalId.trim() : "";
   if (!proposalId) { res.status(400).json({ error: "Push approval requires a valid proposal.", code: "invalid_proposal" }); return; }
-  try { res.json(await pushProposal(proposalId)); } catch (error) { sendExecutionError(res, error); }
+  try {
+    const result = await pushProposal(proposalId, approvalId);
+    recordServerToolTrace(getAgentSessionForProposal(proposalId)?.id, "git_push", "completed", { proposalId }, "Authenticated non-force push completed.");
+    res.json(result);
+  } catch (error) {
+    recordServerToolTrace(getAgentSessionForProposal(proposalId)?.id, "git_push", "denied", { proposalId }, undefined, error instanceof Error ? error.name : "git_push_failed");
+    sendExecutionError(res, error);
+  }
 });
 
 router.post("/ai/chat", async (req, res) => {

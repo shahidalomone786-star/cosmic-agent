@@ -842,6 +842,15 @@ export interface ExecuteChangeProposalInput {
 
 export type ProposalApprovalFileHashes = {[key: string]: string};
 
+export type ProposalApprovalAction = typeof ProposalApprovalAction[keyof typeof ProposalApprovalAction];
+
+
+export const ProposalApprovalAction = {
+  apply: 'apply',
+  commit: 'commit',
+  push: 'push',
+} as const;
+
 export interface ProposalApproval {
   approvalId: string;
   taskId?: string;
@@ -851,6 +860,7 @@ export interface ProposalApproval {
   fileHashes: ProposalApprovalFileHashes;
   approvedAt: string;
   approvedByUser: string;
+  action: ProposalApprovalAction;
 }
 
 export interface ProposalActionInput {
@@ -921,6 +931,10 @@ export interface CommitReview {
 export interface CommitChangeProposalInput {
   /** @minLength 1 */
   proposalId: string;
+  /** @minLength 1 */
+  approvalId: string;
+  /** @minLength 1 */
+  applyApprovalId: string;
   /**
      * @minLength 1
      * @maxLength 200

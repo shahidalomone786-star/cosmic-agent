@@ -76,6 +76,7 @@ type Session = {
   commit?: CommitResult;
   commitBaseSha?: string;
   approval?: ProposalApproval;
+  staged: boolean;
 };
 
 const MAX_FILES = Number(process.env.COSMIC_MAX_PROPOSAL_FILES ?? 20);
@@ -103,7 +104,7 @@ export function registerProposal(proposal: ChangeProposal, repository?: Reposito
     if (binaryExtension.test(relative) || file.originalCode.includes("\0") || file.proposedCode.includes("\0")) throw new PatchExecutionError("binary_file", `Binary file edits are not supported: ${file.path}`);
     if (Buffer.byteLength(file.proposedCode) > MAX_TEXT_BYTES) throw new PatchExecutionError("too_large", `File exceeds the safe size limit: ${file.path}`);
   }
-  sessions.set(proposal.proposalId, { proposal, repository, provider, snapshots: [], applied: false, undoAvailable: false, validated: false });
+  sessions.set(proposal.proposalId, { proposal, repository, provider, snapshots: [], applied: false, undoAvailable: false, validated: false, staged: false });
 }
 
 export function getRegisteredProposal(proposalId: string): { proposal: ChangeProposal; repository?: RepositoryRef; provider?: "groq" | "gemini" } | undefined {
@@ -171,7 +172,24 @@ export function markProposalValidated(proposalId: string, validated: boolean): v
   const session = sessions.get(proposalId);
   if (!session?.applied) throw new PatchExecutionError("invalid_proposal", "Only an applied proposal can be validated.");
   session.validated = validated;
+  if (!validated) session.staged = false;
   if (!validated) session.undoAvailable = false;
+}
+
+export async function stageProposal(proposalId: string, approvalId: string): Promise<{ status: "staged"; proposalId: string; files: string[] }> {
+  const session = sessions.get(proposalId);
+  if (!session?.applied || !session.validated || !session.repository) {
+    throw new PatchExecutionError("invalid_proposal", "Only a successfully validated approved change can be staged.");
+  }
+  if (!approvalId) throw new PatchExecutionError("invalid_proposal", "Explicit user approval is required before staging.");
+  try {
+    session.approval = assertApproval(approvalId, session.proposal, session.repository, undefined, "apply");
+  } catch (error) {
+    throw new PatchExecutionError("invalid_proposal", error instanceof Error ? error.message : "The approval could not be verified.");
+  }
+  await verifyValidatedFiles(session);
+  session.staged = true;
+  return { status: "staged", proposalId, files: session.snapshots.map((snapshot) => snapshot.relativePath) };
 }
 
 export async function getCommitReview(proposalId: string): Promise<CommitReviewResult> {
@@ -193,10 +211,17 @@ export async function getCommitReview(proposalId: string): Promise<CommitReviewR
   };
 }
 
-export async function commitProposal(proposalId: string, message: string): Promise<CommitResult> {
+export async function commitProposal(proposalId: string, approvalId: string, message: string): Promise<CommitResult> {
   const review = await getCommitReview(proposalId);
   const session = sessions.get(proposalId);
   if (!session) throw new PatchExecutionError("not_found", "This proposal is no longer available.");
+  if (!session.staged) throw new PatchExecutionError("invalid_proposal", "The approved proposal must be staged before commit.");
+  if (!approvalId) throw new PatchExecutionError("invalid_proposal", "Explicit commit approval is required.");
+  try {
+    assertApproval(approvalId, session.proposal, session.repository, undefined, "commit");
+  } catch (error) {
+    throw new PatchExecutionError("invalid_proposal", error instanceof Error ? error.message : "The commit approval could not be verified.");
+  }
   const cleanMessage = message.trim();
   if (!cleanMessage || cleanMessage.length > 200) throw new PatchExecutionError("invalid_proposal", "Enter a commit message between 1 and 200 characters.");
   const state = await githubWriteProvider.getRepositoryState(review.repository, review.branch);
@@ -230,10 +255,16 @@ export function getPushReview(proposalId: string): PushReviewResult {
   };
 }
 
-export async function pushProposal(proposalId: string): Promise<PushResult> {
+export async function pushProposal(proposalId: string, approvalId: string): Promise<PushResult> {
   const review = getPushReview(proposalId);
   const session = sessions.get(proposalId);
   if (!session?.commit) throw new PatchExecutionError("invalid_proposal", "A successful commit approval is required before push.");
+  if (!approvalId) throw new PatchExecutionError("invalid_proposal", "Explicit push approval is required.");
+  try {
+    assertApproval(approvalId, session.proposal, session.repository, undefined, "push");
+  } catch (error) {
+    throw new PatchExecutionError("invalid_proposal", error instanceof Error ? error.message : "The push approval could not be verified.");
+  }
   const expectedHeadSha = session.commitBaseSha;
   if (!expectedHeadSha) throw new PatchExecutionError("invalid_proposal", "The approved commit state is incomplete. Push was cancelled.");
   const comparison = await githubWriteProvider.compareBranch(review.repository, review.branch, expectedHeadSha);

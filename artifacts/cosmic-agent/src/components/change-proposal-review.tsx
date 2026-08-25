@@ -56,6 +56,7 @@ export function ChangeProposalReview({
   const [commitMessage, setCommitMessage] = useState(`Update ${proposal.summary}`.slice(0, 200));
   const [phase, setPhase] = useState<"idle" | "commit_review" | "commit_processing" | "provider_not_configured" | "push_review" | "push_processing" | "no_push" | "success" | "conflict">("idle");
   const [busy, setBusy] = useState(false);
+  const [applyApprovalId, setApplyApprovalId] = useState("");
   const [error, setError] = useState("");
   const [openFiles, setOpenFiles] = useState<string[]>(proposal.files[0] ? [proposal.files[0].path] : []);
   const toggleFile = (path: string) => setOpenFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path]);
@@ -76,6 +77,7 @@ export function ChangeProposalReview({
       }
       const approval = await approvalResponse.json() as { approvalId?: string };
       if (!approval.approvalId) throw new Error("The server did not return an approval authorization.");
+      setApplyApprovalId(approval.approvalId);
       const result = await executeChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId } as Parameters<typeof executeChangeProposal>[0]);
       setExecution(result);
       if (result.status === "applied") {
@@ -91,7 +93,14 @@ export function ChangeProposalReview({
   const commitChanges = async () => {
     setBusy(true); setError(""); setPhase("commit_processing");
     try {
-      const result = await commitChangeProposal({ proposalId: proposal.proposalId, message: commitMessage });
+      const approvalResponse = await fetch("/api/ai/change-proposal/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposalId: proposal.proposalId, action: "commit" }),
+      });
+      const approval = await approvalResponse.json() as { approvalId?: string; error?: string };
+      if (!approvalResponse.ok || !approval.approvalId) throw new Error(approval.error || "Commit approval could not be recorded.");
+      const result = await commitChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId, applyApprovalId, message: commitMessage } as Parameters<typeof commitChangeProposal>[0]);
       setCommit(result);
       onCommitted?.(result);
       setPushReview(await getChangeProposalPushReview({ proposalId: proposal.proposalId }));
@@ -105,7 +114,14 @@ export function ChangeProposalReview({
   const pushChanges = async () => {
     setBusy(true); setError(""); setPhase("push_processing");
     try {
-      const result = await pushChangeProposal({ proposalId: proposal.proposalId });
+      const approvalResponse = await fetch("/api/ai/change-proposal/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposalId: proposal.proposalId, action: "push" }),
+      });
+      const approval = await approvalResponse.json() as { approvalId?: string; error?: string };
+      if (!approvalResponse.ok || !approval.approvalId) throw new Error(approval.error || "Push approval could not be recorded.");
+      const result = await pushChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId } as Parameters<typeof pushChangeProposal>[0]);
       setPhase("success");
       setPushReview((current) => current ? { ...current, commitSha: result.commitSha, shortSha: result.shortSha } : current);
       onPushed?.(result);

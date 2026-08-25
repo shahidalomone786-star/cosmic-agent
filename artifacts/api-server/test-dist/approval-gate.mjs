@@ -4765,7 +4765,8 @@ var PostAiChangeProposalApproveResponse = objectType({
   "repositorySha": stringType(),
   "fileHashes": recordType(stringType(), stringType()),
   "approvedAt": stringType(),
-  "approvedByUser": stringType()
+  "approvedByUser": stringType(),
+  "action": enumType(["apply", "commit", "push"])
 });
 var UndoChangeProposalBody = objectType({
   "proposalId": stringType().min(1)
@@ -4799,6 +4800,8 @@ var GetChangeProposalCommitReviewResponse = objectType({
 var commitChangeProposalBodyMessageMax = 200;
 var CommitChangeProposalBody = objectType({
   "proposalId": stringType().min(1),
+  "approvalId": stringType().min(1),
+  "applyApprovalId": stringType().min(1),
   "message": stringType().min(1).max(commitChangeProposalBodyMessageMax)
 });
 var CommitChangeProposalResponse = objectType({
@@ -4968,7 +4971,8 @@ var GetRepositoryOverviewResponse = objectType({
 
 // src/ai/approval-gate.ts
 var approvalRequestSchema = external_exports.object({
-  proposalId: external_exports.string().min(1)
+  proposalId: external_exports.string().min(1),
+  action: external_exports.enum(["apply", "commit", "push"]).default("apply")
 });
 var ApprovalGateError = class extends Error {
   constructor(code, message) {
@@ -4984,7 +4988,7 @@ function repositorySha(repository, proposal) {
   return createHash("sha256").update(`${repository?.owner ?? ""}/${repository?.name ?? ""}@${repository?.branch ?? ""}
 ${proposal.files.map((file) => `${file.path}:${hash(file.originalCode)}`).join("\n")}`).digest("hex");
 }
-function approveProposal(proposal, repository, approvedByUser, taskId) {
+function approveProposal(proposal, repository, approvedByUser, taskId, action = "apply") {
   const user = approvedByUser.trim();
   if (!user) throw new ApprovalGateError("unauthenticated", "An authenticated user is required to approve changes.");
   const approval = {
@@ -4995,14 +4999,15 @@ function approveProposal(proposal, repository, approvedByUser, taskId) {
     repositorySha: repositorySha(repository, proposal),
     fileHashes: Object.fromEntries(proposal.files.map((file) => [file.path, hash(file.originalCode)])),
     approvedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    approvedByUser: user.slice(0, 200)
+    approvedByUser: user.slice(0, 200),
+    action
   };
   approvals.set(approval.approvalId, approval);
   return approval;
 }
-function assertApproval(approvalId, proposal, repository, taskId) {
+function assertApproval(approvalId, proposal, repository, taskId, action = "apply") {
   const approval = approvals.get(approvalId);
-  if (!approval || approval.proposalId !== proposal.proposalId || approval.taskId && taskId && approval.taskId !== taskId) {
+  if (!approval || approval.action !== action || approval.proposalId !== proposal.proposalId || approval.taskId && taskId && approval.taskId !== taskId) {
     throw new ApprovalGateError("invalid_approval", "This approval does not authorize the requested proposal.");
   }
   if (approval.proposalVersion !== proposalVersion(proposal) || approval.repositorySha !== repositorySha(repository, proposal) || JSON.stringify(approval.fileHashes) !== JSON.stringify(Object.fromEntries(proposal.files.map((file) => [file.path, hash(file.originalCode)])))) {

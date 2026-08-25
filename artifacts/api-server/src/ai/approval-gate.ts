@@ -5,8 +5,10 @@ import { z } from "@workspace/api-zod";
 
 export const approvalRequestSchema = z.object({
   proposalId: z.string().min(1),
+  action: z.enum(["apply", "commit", "push"]).default("apply"),
 });
 
+export type ApprovalAction = "apply" | "commit" | "push";
 export type ProposalApproval = {
   approvalId: string;
   taskId?: string;
@@ -16,6 +18,7 @@ export type ProposalApproval = {
   fileHashes: Record<string, string>;
   approvedAt: string;
   approvedByUser: string;
+  action: ApprovalAction;
 };
 
 export class ApprovalGateError extends Error {
@@ -43,6 +46,7 @@ export function approveProposal(
   repository: RepositoryRef | undefined,
   approvedByUser: string,
   taskId?: string,
+  action: ApprovalAction = "apply",
 ): ProposalApproval {
   const user = approvedByUser.trim();
   if (!user) throw new ApprovalGateError("unauthenticated", "An authenticated user is required to approve changes.");
@@ -55,6 +59,7 @@ export function approveProposal(
     fileHashes: Object.fromEntries(proposal.files.map((file) => [file.path, hash(file.originalCode)])),
     approvedAt: new Date().toISOString(),
     approvedByUser: user.slice(0, 200),
+    action,
   };
   approvals.set(approval.approvalId, approval);
   return approval;
@@ -65,9 +70,10 @@ export function assertApproval(
   proposal: ChangeProposal,
   repository: RepositoryRef | undefined,
   taskId?: string,
+  action: ApprovalAction = "apply",
 ): ProposalApproval {
   const approval = approvals.get(approvalId);
-  if (!approval || approval.proposalId !== proposal.proposalId || (approval.taskId && taskId && approval.taskId !== taskId)) {
+  if (!approval || approval.action !== action || approval.proposalId !== proposal.proposalId || (approval.taskId && taskId && approval.taskId !== taskId)) {
     throw new ApprovalGateError("invalid_approval", "This approval does not authorize the requested proposal.");
   }
   if (

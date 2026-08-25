@@ -21,12 +21,8 @@ router.post("/settings/github", async (req, res): Promise<void> => {
     return;
   }
   const result = await validateGitHubToken(token);
-  if (result.status !== "connected") {
-    res.status(result.status === "rate_limited" ? 429 : 422).json(safe(result.status));
-    return;
-  }
-  await saveGitHubCredential(user.id, token, "connected", true);
-  res.json(safe("connected"));
+  await saveGitHubCredential(user.id, token, result.status, result.status === "connected");
+  res.json(safe(result.status));
 });
 
 router.post("/settings/github/validate", async (req, res): Promise<void> => {

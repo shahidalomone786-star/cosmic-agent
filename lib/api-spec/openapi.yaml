@@ -1111,7 +1111,10 @@ components:
           additionalProperties: { type: string }
         approvedAt: { type: string }
         approvedByUser: { type: string }
-      required: [approvalId, proposalId, proposalVersion, repositorySha, fileHashes, approvedAt, approvedByUser]
+        action:
+          type: string
+          enum: [apply, commit, push]
+      required: [approvalId, proposalId, proposalVersion, repositorySha, fileHashes, approvedAt, approvedByUser, action]
     ProposalActionInput:
       type: object
       properties:
@@ -1159,8 +1162,10 @@ components:
       type: object
       properties:
         proposalId: { type: string, minLength: 1 }
+        approvalId: { type: string, minLength: 1 }
+        applyApprovalId: { type: string, minLength: 1 }
         message: { type: string, minLength: 1, maxLength: 200 }
-      required: [proposalId, message]
+      required: [proposalId, approvalId, applyApprovalId, message]
     CommitResult:
       type: object
       properties:

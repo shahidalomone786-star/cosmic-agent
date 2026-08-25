@@ -9,6 +9,8 @@ import { GroqProviderError } from "./groq-provider";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ValidationResult } from "./validation-runtime";
+import { githubWriteProvider } from "../repository/github-write-provider";
+import { redactGitSensitive } from "../repository/git-security";
 
 export const MAX_AGENT_ITERATIONS = Math.max(1, Math.min(Number(process.env.COSMIC_MAX_AGENT_ITERATIONS ?? 6), 12));
 export const MAX_SESSION_COUNT = 100;
@@ -131,10 +133,10 @@ export type AgentToolDefinition = {
   timeoutMs: number;
 };
 
-const managerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status"]);
+const managerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "git_status", "git_diff"]);
 const proposalTools = new Set(["create_proposal"]);
 const workerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "create_proposal"]);
-const reviewerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status"]);
+const reviewerTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "git_status", "git_diff"]);
 const validatorTools = new Set(["repository_search", "read_file", "file_context", "analyze_repository", "repository_status", "run_typecheck", "run_build", "inspect_validation_result"]);
 const execFileAsync = promisify(execFile);
 
@@ -258,6 +260,11 @@ const toolDefinitions: readonly AgentToolDefinition[] = [
   { name: "run_build", permission: "approval_required", schema: { proposalId: "string", scope: "workspace|frontend|backend" }, outputLimit: 4_000, timeoutMs: 60_000 },
   { name: "inspect_validation_result", permission: "read", schema: { proposalId: "string" }, outputLimit: 4_000, timeoutMs: 5_000 },
   { name: "repository_status", permission: "read", schema: { repository: "RepositoryRef" }, outputLimit: 2_000, timeoutMs: 5_000 },
+  { name: "git_status", permission: "read", schema: { repository: "RepositoryRef" }, outputLimit: 3_000, timeoutMs: 12_000 },
+  { name: "git_diff", permission: "read", schema: { repository: "RepositoryRef", baseSha: "string?" }, outputLimit: 8_000, timeoutMs: 12_000 },
+  { name: "git_stage_proposed_changes", permission: "approval_required", schema: { proposalId: "string", approvalId: "string" }, outputLimit: 3_000, timeoutMs: 20_000 },
+  { name: "git_commit", permission: "approval_required", schema: { proposalId: "string", approvalId: "string", message: "string" }, outputLimit: 3_000, timeoutMs: 30_000 },
+  { name: "git_push", permission: "approval_required", schema: { proposalId: "string", approvalId: "string" }, outputLimit: 3_000, timeoutMs: 30_000 },
 ];
 
 export class AgentToolError extends Error {
@@ -446,6 +453,12 @@ export async function executeAgentTool(
   }
   if (name === "analyze_repository") result = await run(getRepositoryOverview(repository));
   if (name === "repository_status") result = { repository: `${repository.owner}/${repository.name}`, branch: repository.branch, mode: "read_only", writes: "approval_required" };
+  if (name === "git_status") result = await run(githubWriteProvider.getStatus(repository, repository.branch));
+  if (name === "git_diff") {
+    const baseSha = input.baseSha === undefined ? undefined : typeof input.baseSha === "string" ? input.baseSha : "";
+    if (baseSha === "") throw new AgentToolError("invalid_input", "git_diff baseSha must be a commit SHA when provided.");
+    result = await run(githubWriteProvider.getDiff(repository, repository.branch, baseSha));
+  }
   if (name === "create_proposal") {
     const paths = Array.isArray(input.paths) ? input.paths.filter((path): path is string => typeof path === "string") : [];
     result = await run(createChangeProposal(provider, session.activeModel, session.task, repository, uniquePaths(paths)));
@@ -676,6 +689,33 @@ export function getAgentToolDefinitions() {
   return toolDefinitions;
 }
 
+export function recordServerToolTrace(
+  sessionId: string | undefined,
+  tool: string,
+  status: ToolCallTrace["status"],
+  input: Record<string, unknown>,
+  outputSummary?: string,
+  errorCode?: string,
+): void {
+  if (!sessionId) return;
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  const timestamp = now();
+  session.toolTraces.push({
+    toolCallId: randomUUID(),
+    taskId: session.id,
+    role: "manager",
+    tool,
+    status,
+    startedAt: timestamp,
+    completedAt: timestamp,
+    inputSummary: summarizeInput(input),
+    outputSummary,
+    errorCode,
+  });
+  session.updatedAt = timestamp;
+}
+
 export async function requestAgentTool(
   provider: AiProvider,
   sessionId: string,
@@ -698,11 +738,11 @@ export async function requestAgentTool(
 }
 
 function summarizeInput(input: Record<string, unknown>): string {
-  return Object.entries(input)
+  return redactGitSensitive(Object.entries(input)
     .filter(([key]) => !/(secret|token|key|password|credential|content|code)/i.test(key))
     .map(([key, value]) => `${key}=${typeof value === "string" ? value.slice(0, 120) : Array.isArray(value) ? `[${value.length} items]` : typeof value}`)
     .join(", ")
-    .slice(0, 500);
+    .slice(0, 500));
 }
 
 function summarizeOutput(value: unknown): string {

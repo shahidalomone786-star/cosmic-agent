@@ -33,3 +33,23 @@ export function classifyGitHubResponse(
   if (status >= 500) return "service_unavailable";
   return status >= 200 && status < 300 ? "ok" : "network";
 }
+
+export type GitHubCredentialStatus = "connected" | "invalid" | "rate_limited" | "unavailable";
+
+export function classifyGitHubCredentialStatus(
+  status: number,
+  contentType: string,
+  rawBody: string,
+  responseBody: { message?: string } | null,
+): GitHubCredentialStatus {
+  switch (classifyGitHubResponse(status, contentType, rawBody, responseBody)) {
+    case "ok":
+      return "connected";
+    case "permission_denied":
+      return "invalid";
+    case "rate_limited":
+      return "rate_limited";
+    default:
+      return "unavailable";
+  }
+}
