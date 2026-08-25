@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readRepositoryFile, retrieveRepositoryContext, RepositoryError, type RepositoryRef } from "../repository/github-provider";
 import type { AiChatMessage, AiProvider } from "./ai-provider";
+import { ROLE_SYSTEM_PROMPTS } from "./manager-brain";
 
 export type ProposalRisk = "LOW" | "MEDIUM" | "HIGH";
 
@@ -121,7 +122,8 @@ export async function createChangeProposal(
     {
       role: "system",
       content: [
-        "You are a proposal-only coding assistant.",
+        ROLE_SYSTEM_PROMPTS.frontend,
+        "You are operating in proposal-only mode.",
         "Return JSON only. Do not use markdown fences.",
         "You may propose changes only to files listed in the source context.",
         "Return the complete proposed file content in proposedCode; never return a partial snippet.",

@@ -4,7 +4,7 @@ import type { AiProvider } from "./ai-provider";
 import { retrieveRepositoryContext, type RepositoryContextResult, type RepositoryRef, readRepositoryFile, searchRepository, getRepositoryOverview } from "../repository/github-provider";
 import { registerProposal } from "../repository/patch-executor";
 import { fitContext } from "./context-budget";
-import { initializeManager, MAX_TOOL_CALLS, type AgentContextMemory, type AgentPlan, type ManagerDecision, type ProviderBudget, type TaskClassification, type ToolCallTrace, type PlanRole } from "./manager-brain";
+import { initializeManager, MAX_TOOL_CALLS, COSMIC_AGENT_CREATOR, type AgentContextMemory, type AgentPlan, type ManagerDecision, type ProviderBudget, type TaskClassification, type ToolCallTrace, type PlanRole } from "./manager-brain";
 import { GroqProviderError } from "./groq-provider";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -55,6 +55,7 @@ export type AgentPlanStep = {
 
 export type AgentSession = {
   id: string;
+  creatorName: string;
   task: string;
   status: AgentSessionStatus;
   currentStep: AgentStep;
@@ -502,6 +503,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
   const manager = initializeManager(randomUUID(), task, input.model, provider.getModels());
   const session: AgentSession = {
     id: randomUUID(),
+    creatorName: COSMIC_AGENT_CREATOR,
     task: task.slice(0, 2_000),
     status: "running",
     currentStep: "understand",

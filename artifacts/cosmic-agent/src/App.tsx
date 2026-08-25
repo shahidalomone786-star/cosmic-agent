@@ -11,7 +11,7 @@ import { ChangeProposalReview } from '@/components/change-proposal-review';
 import {
   Aperture, Bot, Check, ChevronDown, CircleAlert, CircleCheck, Code2, Copy, Gauge, LockKeyhole, Menu, MoreHorizontal,
   FileCode2,
-  Activity, GitBranch, Pencil, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Terminal, Trash2, Wrench, X, Square,
+  Activity, Eye, GitBranch, Pencil, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Terminal, Trash2, Wrench, X, Square,
   Github, KeyRound, LoaderCircle, LogIn, LogOut, Settings as SettingsIcon,
 } from 'lucide-react';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
@@ -316,6 +316,71 @@ function formatCompactNumber(value: number) {
   return `${value}`;
 }
 
+type ActivityTone = 'active' | 'complete' | 'failed' | 'neutral';
+const activityIconFor = (label: string) => {
+  const normalized = label.toLowerCase();
+  if (normalized.includes('search')) return <Search size={13} />;
+  if (normalized.includes('read') || normalized.includes('context')) return <FileCode2 size={13} />;
+  if (normalized.includes('plan')) return <Sparkles size={13} />;
+  if (normalized.includes('edit') || normalized.includes('proposal')) return <Pencil size={13} />;
+  if (normalized.includes('review')) return <Eye size={13} />;
+  if (normalized.includes('validat') || normalized.includes('test')) return <ShieldCheck size={13} />;
+  if (normalized.includes('build')) return <Terminal size={13} />;
+  if (normalized.includes('provider')) return <LoaderCircle size={13} />;
+  return <Activity size={13} />;
+};
+const activityLabelForTool = (tool: string) => ({
+  repository_search: 'Searching files',
+  read_file: 'Reading file',
+  file_context: 'Reading file context',
+  analyze_repository: 'Reviewing repository',
+  repository_status: 'Reviewing repository status',
+  create_proposal: 'Editing proposal',
+  run_typecheck: 'Validating',
+  run_build: 'Building',
+  inspect_validation_result: 'Reviewing validation',
+  git_status: 'Reviewing Git status',
+  git_diff: 'Reviewing changes',
+  git_stage_proposed_changes: 'Staging approved files',
+  git_commit: 'Creating approved commit',
+  git_push: 'Pushing approved commit',
+} as Record<string, string>)[tool] ?? tool.replaceAll('_', ' ');
+
+function ActivityPanel({ session }: { session: RuntimeSession }) {
+  const [expanded, setExpanded] = useState(false);
+  const traces = session.toolTraces ?? [];
+  const events = session.events ?? [];
+  const proposalFiles = session.proposalData?.files ?? [];
+  const fileReadCount = session.context.filesIncluded;
+  const filesAdded = proposalFiles.filter((file) => file.operation === 'create').length;
+  const filesEdited = proposalFiles.filter((file) => file.operation === 'edit').length;
+  const hasLineStats = Boolean(session.proposalData);
+  const activity = [
+    ...events.map((event) => ({ id: event.id, label: event.label, detail: event.detail, timestamp: event.timestamp, tone: event.type === 'task_failed' ? 'failed' as ActivityTone : event.type === 'task_completed' || event.type === 'proposal_generated' ? 'complete' as ActivityTone : 'neutral' as ActivityTone })),
+    ...traces.map((trace) => ({ id: trace.toolCallId, label: activityLabelForTool(trace.tool), detail: trace.outputSummary ?? trace.errorCode, timestamp: trace.completedAt ?? trace.startedAt, tone: trace.status === 'failed' || trace.status === 'denied' || trace.status === 'timeout' ? 'failed' as ActivityTone : trace.status === 'completed' ? 'complete' as ActivityTone : 'active' as ActivityTone })),
+  ].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const visibleActivity = expanded ? activity : activity.slice(-5);
+  const counters = [
+    ['Actions', traces.length],
+    ['Files read', fileReadCount || '—'],
+    ['Files added', hasLineStats ? filesAdded : '—'],
+    ['Files edited', hasLineStats ? filesEdited : '—'],
+    ['Lines added', hasLineStats ? session.proposalData!.addedLines : '—'],
+    ['Lines removed', hasLineStats ? session.proposalData!.removedLines : '—'],
+    ['Lines changed', hasLineStats ? session.proposalData!.addedLines + session.proposalData!.removedLines : '—'],
+  ];
+  const current = activity.at(-1);
+  return <section className="live-activity-panel" aria-label="Live agent activity" data-testid="panel-live-activity">
+    <div className="live-activity-head">
+      <div><span className="agent-panel-kicker"><Activity size={11} /> Live activity</span><strong>{current?.label ?? 'No activity recorded'}</strong></div>
+      <span className={`activity-pulse ${session.status === 'running' ? 'active' : session.status === 'failed' ? 'failed' : 'complete'}`} aria-label={session.status} />
+    </div>
+    <div className="activity-counters">{counters.map(([label, value]) => <div key={label} className="activity-counter"><strong>{value}</strong><span>{label}</span></div>)}</div>
+    <div className="activity-list">{visibleActivity.map((item) => <div className={`activity-row ${item.tone}`} key={item.id}><span className="activity-row-icon">{activityIconFor(item.label)}</span><div><strong>{item.label}</strong>{item.detail && <small>{item.detail}</small>}</div><time>{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>)}</div>
+    {activity.length > 5 && <button className="activity-expand" onClick={() => setExpanded((value) => !value)}>{expanded ? 'Show latest' : `Show ${activity.length - 5} earlier events`}<ChevronDown size={13} className={expanded ? 'rotate' : ''} /></button>}
+  </section>;
+}
+
 function AgentTimeline({ session, model }: { session: RuntimeSession; model: AiModel }) {
   const completedSteps = session.plan.filter((step) => step.status === 'complete').length;
   const planPercent = session.plan.length ? Math.round((completedSteps / session.plan.length) * 100) : 0;
@@ -340,6 +405,7 @@ function AgentTimeline({ session, model }: { session: RuntimeSession; model: AiM
       <span className={`agent-status ${session.status}`} data-testid="status-agent-runtime">{statusLabel}</span>
     </div>
 
+    <ActivityPanel session={session} />
     <div className="agent-scan-grid" aria-label="Execution summary">
       <div className="agent-scan-card" data-testid="status-agent-step"><span className="agent-scan-label"><Gauge size={12} /> Current step</span><strong>{session.currentStep.replaceAll('_', ' ')}</strong><small>{completedSteps} of {session.plan.length} plan steps complete</small></div>
       <div className="agent-scan-card" data-testid="status-agent-model"><span className="agent-scan-label"><Bot size={12} /> Selected model</span><strong>{model.displayName}</strong><small>{session.provider} · iteration {session.iteration}/{session.maxIterations}</small></div>
