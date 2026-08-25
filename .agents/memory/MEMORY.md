@@ -8,3 +8,4 @@
 - [Approval binding](approval-binding.md) — Repository writes require server-held authorization bound to the exact proposal and repository snapshot.
 - [Route middleware namespaces](route-middleware-namespaces.md) — Scope router-level guards before rejecting requests or earlier routers can intercept unrelated endpoints.
 - [Git approval boundary](git-approval-boundary.md) — Keep apply, commit, and push approvals distinct and server-bound.
+- [Express route patterns](express-route-patterns.md) — Express 5 requires mounted middleware for catch-all subpaths; unnamed wildcard route patterns crash startup.

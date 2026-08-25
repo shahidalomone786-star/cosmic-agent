@@ -112,6 +112,11 @@ export function getRegisteredProposal(proposalId: string): { proposal: ChangePro
   return session ? { proposal: session.proposal, repository: session.repository, provider: session.provider } : undefined;
 }
 
+export function isProposalPreviewable(proposalId: string): boolean {
+  const session = sessions.get(proposalId);
+  return Boolean(session?.applied && session.validated);
+}
+
 export async function executeProposal(proposalId: string, approvalId?: string): Promise<ExecutionResult> {
   const session = sessions.get(proposalId);
   if (!session) throw new PatchExecutionError("not_found", "This proposal is no longer available. Please regenerate it.");
