@@ -160,6 +160,21 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
   const active = conversations.find((conversation) => conversation.id === activeId) ?? null;
   const selectedModel = models.find((model) => model.id === selectedModelId) ?? models[0] ?? fallbackModels[0];
 
+   useEffect(() => {
+     if (!agentSession?.id) return;
+     let activePoll = true;
+     const poll = async () => {
+       try {
+         const latest = await apiJson<RuntimeSession>(`/api/ai/agent/sessions/${encodeURIComponent(agentSession.id)}`);
+         if (activePoll) setAgentSession(latest);
+       } catch {
+         // The existing session remains visible if a transient poll fails.
+       }
+     };
+     const timer = window.setInterval(() => void poll(), 700);
+     return () => { activePoll = false; window.clearInterval(timer); };
+   }, [agentSession?.id]);
+
   useEffect(() => { localStorage.setItem('cosmic-conversations', JSON.stringify(conversations)); }, [conversations]);
   useEffect(() => { if (repository) localStorage.setItem('cosmic-repository', JSON.stringify(repository)); else localStorage.removeItem('cosmic-repository'); }, [repository]);
   useEffect(() => {
@@ -338,7 +353,7 @@ const activityLabelForTool = (tool: string) => ({
   file_context: 'Reading file context',
   analyze_repository: 'Reviewing repository',
   repository_status: 'Reviewing repository status',
-  create_proposal: 'Editing proposal',
+  create_proposal: 'Creating proposal',
   run_typecheck: 'Validating',
   run_build: 'Building',
   inspect_validation_result: 'Reviewing validation',

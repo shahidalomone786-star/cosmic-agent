@@ -767,6 +767,13 @@ export function recordAgentValidation(proposalId: string, result: { status: stri
   const session = sessionId ? sessions.get(sessionId) : undefined;
   if (!session) return undefined;
   session.memory.validationResults = [...session.memory.validationResults, `${result.status}: ${result.message}`].slice(-10);
+  if (result.status === "applied" && session.currentState === "VALIDATING") {
+    session.status = "completed";
+    session.currentStep = "complete";
+    session.plan = session.plan.map((step) => ({ ...step, status: "complete" }));
+    transitionAgentState(session, "COMPLETED");
+    addEvent(session, "task_completed", "Validation passed", "Approved files are present locally and the application is ready for Preview.");
+  }
   if (result.status === "validation_failed") {
     session.recovery = { code: "validation_failure", message: "Validation failed safely. A new proposal is required; no automatic fix was applied.", newProposalRequired: true };
     session.status = "waiting_approval";
