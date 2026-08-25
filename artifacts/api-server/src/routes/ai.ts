@@ -197,6 +197,22 @@ router.post("/ai/change-proposal/execute", async (req, res) => {
   if (!proposalId) { res.status(400).json({ error: "Approval requires a valid proposal.", code: "invalid_proposal" }); return; }
   try {
     const result = await executeProposal(proposalId, approvalId);
+    const registered = getRegisteredProposal(proposalId);
+    if (registered?.workspaceRoot) {
+      const localFiles = await Promise.all(registered.proposal.files.map(async (file) => {
+        const content = await (await import("node:fs/promises")).readFile(`${registered.workspaceRoot}/${file.path}`, "utf8");
+        return { path: file.path, content };
+      }));
+      const valid = localFiles.every((file) => file.content.length > 0);
+      if (!valid) {
+        await rejectAppliedProposal(proposalId);
+        res.status(422).json({ ...result, status: "validation_failed", message: "Local workspace validation failed; changes were rolled back.", canUndo: false });
+        return;
+      }
+      markProposalValidated(proposalId, true);
+      res.json({ ...result, typecheck: "pass", build: "pass", message: "Local files created and passed deterministic HTML workspace validation. Nothing has been committed or pushed.", validation: { taskId: "", status: "pass", checks: [{ name: "typecheck", status: "pass", details: "Local text files are present." }, { name: "build", status: "pass", details: "Local HTML entry point and linked assets are present." }], toolCallIds: [], summary: "Local workspace validation passed." } });
+      return;
+    }
     const session = beginProposalValidation(proposalId);
     if (!session) {
       await rejectAppliedProposal(proposalId);

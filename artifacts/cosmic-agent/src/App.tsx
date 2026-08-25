@@ -165,7 +165,12 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
      let activePoll = true;
      const poll = async () => {
        try {
-         const latest = await apiJson<RuntimeSession>(`/api/ai/agent/sessions/${encodeURIComponent(agentSession.id)}`);
+          const local = agentSession.id.startsWith('local-');
+          const proposalId = local ? agentSession.id.slice('local-'.length) : '';
+          const endpoint = local
+            ? `/api/workspace/default/activity/${encodeURIComponent(proposalId)}`
+            : `/api/ai/agent/sessions/${encodeURIComponent(agentSession.id)}`;
+          const latest = await apiJson<RuntimeSession>(endpoint);
          if (activePoll) setAgentSession(latest);
        } catch {
          // The existing session remains visible if a transient poll fails.
@@ -242,6 +247,24 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
          if (nextSession.proposalData) setProposal(nextSession.proposalData);
       } catch (error) {
         notify(error instanceof Error ? error.message : 'Could not generate a change proposal.');
+      } finally {
+        setIsProposing(false);
+      }
+      return;
+    }
+    if (!repository && isCodingRequest(text)) {
+      setProposalRequest(text);
+      setDraft('');
+      setIsProposing(true);
+      try {
+        const result = await apiJson<{ proposal: ChangeProposal; session: RuntimeSession }>(
+          '/api/workspace/default/racing-game/proposal',
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ request: text }) },
+        );
+        setProposal(result.proposal);
+        setAgentSession(result.session);
+      } catch (error) {
+        notify(error instanceof Error ? error.message : 'Could not create the local workspace proposal.');
       } finally {
         setIsProposing(false);
       }
@@ -372,6 +395,7 @@ function ActivityPanel({ session }: { session: RuntimeSession }) {
   const fileReadCount = session.context.filesIncluded;
   const filesAdded = proposalFiles.filter((file) => file.operation === 'create').length;
   const filesEdited = proposalFiles.filter((file) => file.operation === 'edit').length;
+  const filesDeleted = proposalFiles.filter((file) => (file.operation as string) === 'delete').length;
   const hasLineStats = Boolean(session.proposalData);
   const activity = [
     ...events.map((event) => ({ id: event.id, label: event.label, detail: event.detail, timestamp: event.timestamp, tone: event.type === 'task_failed' ? 'failed' as ActivityTone : event.type === 'task_completed' || event.type === 'proposal_generated' ? 'complete' as ActivityTone : 'neutral' as ActivityTone })),
@@ -380,9 +404,11 @@ function ActivityPanel({ session }: { session: RuntimeSession }) {
   const visibleActivity = expanded ? activity : activity.slice(-5);
   const counters = [
     ['Actions', traces.length],
-    ['Files read', fileReadCount || '—'],
+    ['Files read', fileReadCount ?? '—'],
+    ['Files created', hasLineStats ? filesAdded : '—'],
     ['Files added', hasLineStats ? filesAdded : '—'],
     ['Files edited', hasLineStats ? filesEdited : '—'],
+    ['Files deleted', hasLineStats ? filesDeleted : '—'],
     ['Lines added', hasLineStats ? session.proposalData!.addedLines : '—'],
     ['Lines removed', hasLineStats ? session.proposalData!.removedLines : '—'],
     ['Lines changed', hasLineStats ? session.proposalData!.addedLines + session.proposalData!.removedLines : '—'],

@@ -5,6 +5,7 @@ import repositoryRouter from "./repository";
 import authRouter from "./auth";
 import settingsRouter from "./settings";
 import { getPreview, proxyPreview, startPreview, stopPreview } from "../preview-runtime";
+import workspaceRouter from "./workspace";
 
 const router: IRouter = Router();
 
@@ -13,6 +14,7 @@ router.use(aiRouter);
 router.use(repositoryRouter);
 router.use(authRouter);
 router.use(settingsRouter);
+router.use(workspaceRouter);
 
 router.use((req, res, next) => {
   if (!req.path.startsWith("/preview")) { next(); return; }

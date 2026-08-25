@@ -2,6 +2,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import http from "node:http";
 import type { Request, Response } from "express";
 import { getRegisteredProposal, isProposalPreviewable } from "./repository/patch-executor";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
 export type PreviewState = "starting" | "running" | "reloading" | "stopped" | "build_error" | "runtime_error";
 export type PreviewStatus = {
@@ -58,7 +60,22 @@ async function waitForPort(port: number, timeoutMs = 18_000): Promise<boolean> {
 }
 
 export async function startPreview(proposalId: string): Promise<PreviewStatus> {
-  eligible(proposalId);
+  const registered = eligible(proposalId);
+  if (registered.workspaceRoot) {
+    const item: PreviewProcess = {
+      proposalId, state: "starting", url: previewUrl(proposalId, registered.proposal.files.map((file) => file.path)),
+      command: "workspace static preview (server-controlled)", output: "", port: 0, updatedAt: now(), startedAt: now(),
+    };
+    try {
+      await fs.access(path.join(registered.workspaceRoot, "index.html"));
+      item.state = "running";
+    } catch {
+      item.state = "build_error";
+      item.output = "The local workspace has no index.html entry point.";
+    }
+    previews.set(proposalId, item);
+    return publicStatus(item);
+  }
   const existing = previews.get(proposalId);
   if (existing?.process && !existing.process.killed) {
     existing.state = "reloading";
@@ -117,6 +134,23 @@ export async function stopPreview(proposalId: string): Promise<PreviewStatus> {
   return getPreview(proposalId);
 }
 export async function proxyPreview(req: Request, res: Response, proposalId: string): Promise<void> {
+  const registered = getRegisteredProposal(proposalId);
+  if (registered?.workspaceRoot) {
+    const item = previews.get(proposalId);
+    if (!item || item.state !== "running") { res.status(409).json({ error: "Preview is not running." }); return; }
+    const requestPath = req.originalUrl.replace(`/api/preview/${encodeURIComponent(proposalId)}`, "").split("?")[0] || "/";
+    const relative = requestPath === "/" ? "index.html" : requestPath.replace(/^\/+/, "");
+    try {
+      const safe = path.resolve(registered.workspaceRoot, relative);
+      if (!safe.startsWith(path.resolve(registered.workspaceRoot) + path.sep)) throw new Error("Unsafe preview path.");
+      const content = await fs.readFile(safe);
+      const type = safe.endsWith(".html") ? "text/html; charset=utf-8" : safe.endsWith(".css") ? "text/css; charset=utf-8" : safe.endsWith(".js") ? "text/javascript; charset=utf-8" : "application/octet-stream";
+      res.type(type).send(content);
+    } catch {
+      res.status(404).json({ error: "Preview file not found." });
+    }
+    return;
+  }
   const item = previews.get(proposalId);
   if (!item || item.state !== "running") { res.status(409).json({ error: "Preview is not running." }); return; }
   const requestPath = req.originalUrl.replace(`/api/preview/${encodeURIComponent(proposalId)}`, "") || "/";
