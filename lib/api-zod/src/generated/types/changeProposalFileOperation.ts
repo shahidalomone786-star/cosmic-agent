@@ -12,4 +12,7 @@ export type ChangeProposalFileOperation = typeof ChangeProposalFileOperation[key
 export const ChangeProposalFileOperation = {
   create: 'create',
   edit: 'edit',
+  delete: 'delete',
+  rename: 'rename',
+  directory_create: 'directory_create',
 } as const;

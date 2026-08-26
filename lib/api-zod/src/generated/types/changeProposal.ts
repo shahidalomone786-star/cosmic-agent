@@ -19,4 +19,6 @@ export interface ChangeProposal {
   addedLines: number;
   removedLines: number;
   proposalId: string;
+  plan: string[];
+  validationPlan: string[];
 }

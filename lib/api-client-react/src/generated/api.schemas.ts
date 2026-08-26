@@ -791,11 +791,15 @@ export type ChangeProposalFileOperation = typeof ChangeProposalFileOperation[key
 export const ChangeProposalFileOperation = {
   create: 'create',
   edit: 'edit',
+  delete: 'delete',
+  rename: 'rename',
+  directory_create: 'directory_create',
 } as const;
 
 export interface ChangeProposalFile {
   path: string;
   operation: ChangeProposalFileOperation;
+  fromPath?: string;
   language: string;
   originalCode: string;
   proposedCode: string;
@@ -831,6 +835,8 @@ export interface ChangeProposal {
   addedLines: number;
   removedLines: number;
   proposalId: string;
+  plan: string[];
+  validationPlan: string[];
 }
 
 export interface ExecuteChangeProposalInput {

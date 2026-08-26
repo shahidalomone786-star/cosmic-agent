@@ -7,7 +7,8 @@ export type ProposalRisk = "LOW" | "MEDIUM" | "HIGH";
 
 export type ChangeProposalFile = {
   path: string;
-  operation: "create" | "edit";
+  operation: "create" | "edit" | "delete" | "rename" | "directory_create";
+  fromPath?: string;
   language: string;
   originalCode: string;
   proposedCode: string;
@@ -27,12 +28,16 @@ export type ChangeProposal = {
   affectedFiles: string[];
   addedLines: number;
   removedLines: number;
+  plan: string[];
+  validationPlan: string[];
 };
 
 type ModelProposal = {
   summary?: unknown;
   explanation?: unknown;
   risk?: unknown;
+  plan?: unknown;
+  validationPlan?: unknown;
   files?: unknown;
 };
 
@@ -127,11 +132,11 @@ export async function createChangeProposal(
         "Return JSON only. Do not use markdown fences.",
         "You may propose changes only to files listed in the source context.",
         "Return the complete proposed file content in proposedCode; never return a partial snippet.",
-         "For a new file, set operation to create. For an existing file, set operation to edit and preserve all unrelated content.",
+         "For a new file, set operation to create. For an existing file, set operation to edit and preserve all unrelated content. Use delete for removing an existing file, rename with fromPath for moving an existing file, and directory_create for a new directory.",
         "Do not modify authentication files named authStore.ts or AuthContext.tsx, secrets, credentials, environment files, keys, certificates, node_modules, or .git paths.",
         "Do not add credentials, tokens, passwords, or private keys.",
         "Do not claim the change was applied. This is only a review preview.",
-         'JSON shape: {"summary":"...","explanation":"...","risk":"LOW|MEDIUM|HIGH","files":[{"path":"...","operation":"create|edit","proposedCode":"...","explanation":"..."}]}',
+          'JSON shape: {"summary":"...","explanation":"...","risk":"LOW|MEDIUM|HIGH","plan":["..."],"validationPlan":["..."],"files":[{"path":"...","fromPath":"optional source path for rename","operation":"create|edit|delete|rename|directory_create","proposedCode":"complete file content or empty for delete/rename/directory_create","explanation":"..."}]}',
       ].join("\n"),
     },
     {
@@ -166,23 +171,38 @@ export async function createChangeProposal(
     if (!item || typeof item !== "object") throw new ProposalError("malformed_model_response", "The model returned a malformed file proposal.");
     const candidate = item as Record<string, unknown>;
     const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
-    const operation = candidate.operation === "create" || candidate.operation === "edit"
+    const operation = candidate.operation === "create" || candidate.operation === "edit" || candidate.operation === "delete" || candidate.operation === "rename" || candidate.operation === "directory_create"
       ? candidate.operation
       : sourceFiles.find((file) => file.path === path)?.operation ?? "edit";
     const proposedCode = typeof candidate.proposedCode === "string" ? candidate.proposedCode : "";
     const explanation = typeof candidate.explanation === "string" ? candidate.explanation : "Proposed change from the selected repository context.";
-    if (!path || !proposedCode) throw new ProposalError("malformed_model_response", "Every proposed file needs a path and complete proposedCode.");
+    const fromPath = typeof candidate.fromPath === "string" ? candidate.fromPath.trim() : undefined;
+    if (!path || (typeof candidate.proposedCode !== "string") || ((operation === "create" || operation === "edit") && !proposedCode)) throw new ProposalError("malformed_model_response", "Every content operation needs a path and complete proposedCode.");
     assertEditablePath(path);
-    if (!allowedPaths.includes(path)) throw new ProposalError("insufficient_context", `The proposal targets a file outside the selected context: ${path}`);
-    const original = sourceFiles.find((file) => file.path === path);
+    if (operation !== "rename" && !allowedPaths.includes(path)) throw new ProposalError("insufficient_context", `The proposal targets a file outside the selected context: ${path}`);
+    if (operation === "rename" && (!fromPath || !allowedPaths.includes(fromPath))) throw new ProposalError("insufficient_context", `A rename must identify a source file in the selected context: ${path}`);
+    if (fromPath) assertEditablePath(fromPath);
+    const original = sourceFiles.find((file) => file.path === (operation === "rename" ? fromPath : path));
     if (!original) throw new ProposalError("file_not_found", `The proposed file was not available in the retrieved context: ${path}`);
-    if (operation === "create" && original.operation !== "create") throw new ProposalError("invalid_patch", `Cannot create an existing file: ${path}`);
-    if (operation === "edit" && original.operation !== "edit") throw new ProposalError("invalid_patch", `Cannot edit a file that does not exist: ${path}`);
+    if ((operation === "create" || operation === "directory_create") && original.operation !== "create") throw new ProposalError("invalid_patch", `Cannot create an existing file: ${path}`);
+    if (operation !== "create" && operation !== "directory_create" && original.operation !== "edit") throw new ProposalError("invalid_patch", `Cannot change a file that does not exist: ${path}`);
     if (SECRET_LIKE.test(proposedCode)) throw new ProposalError("protected_file", `The proposal contains credential-like content and was rejected: ${path}`);
-    if (proposedCode === original.content) throw new ProposalError("invalid_patch", `The proposal does not change ${path}.`);
-    const diff = unifiedDiff(path, original.content, proposedCode, operation);
-    const stats = diffStats(original.content, proposedCode);
-    files.push({ path, operation, language: original.language, originalCode: original.content, proposedCode, diff, explanation, ...stats });
+    if (operation === "edit" && proposedCode === original.content) throw new ProposalError("invalid_patch", `The proposal does not change ${path}.`);
+    if (operation === "delete") {
+      if (proposedCode !== "") throw new ProposalError("invalid_patch", `Delete proposals must have an empty proposedCode: ${path}`);
+    }
+    if (operation === "rename" || operation === "directory_create") {
+      if (proposedCode !== "") throw new ProposalError("invalid_patch", `${operation} proposals must have an empty proposedCode: ${path}`);
+    }
+    const targetOriginal = operation === "rename" ? "" : original.content;
+    const targetProposed = operation === "delete" || operation === "rename" || operation === "directory_create" ? "" : proposedCode;
+    const diff = operation === "rename"
+      ? `--- a/${fromPath}\n+++ b/${path}\n@@ rename @@\n`
+      : operation === "directory_create"
+        ? `--- /dev/null\n+++ b/${path}/\n@@ directory create @@\n`
+        : unifiedDiff(path, targetOriginal, targetProposed, operation === "create" ? "create" : "edit");
+    const stats = operation === "delete" ? { addedLines: 0, removedLines: original.content.split("\n").length } : operation === "rename" || operation === "directory_create" ? { addedLines: 0, removedLines: 0 } : diffStats(original.content, proposedCode);
+    files.push({ path, fromPath, operation, language: operation === "directory_create" ? "directory" : original.language, originalCode: original.content, proposedCode: targetProposed, diff, explanation, ...stats });
   }
 
   if (!files.length) throw new ProposalError("invalid_patch", "The model did not produce an applicable change.");
@@ -196,6 +216,8 @@ export async function createChangeProposal(
     affectedFiles: files.map((file) => file.path),
     addedLines: files.reduce((count, file) => count + file.addedLines, 0),
     removedLines: files.reduce((count, file) => count + file.removedLines, 0),
+    plan: Array.isArray(parsed.plan) ? parsed.plan.filter((item): item is string => typeof item === "string").slice(0, 8) : ["Inspect the selected source files.", "Apply only the approved file operations."],
+    validationPlan: Array.isArray(parsed.validationPlan) ? parsed.validationPlan.filter((item): item is string => typeof item === "string").slice(0, 8) : ["Run the repository validation checks.", "Confirm the changed files match the approved proposal."],
     proposalId: "",
   };
   proposal.proposalId = proposalId(proposal);

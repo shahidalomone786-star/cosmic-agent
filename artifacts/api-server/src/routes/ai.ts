@@ -23,6 +23,7 @@ import { validateAppliedProposal } from "../ai/validator-runtime";
 import { approveProposal, ApprovalGateError, approvalRequestSchema } from "../ai/approval-gate";
 import { requireAuthenticatedUser } from "../middlewares/auth-middleware";
 import { recordLocalLifecycle, recordLocalValidation } from "../workspace/local-session";
+import { validateLocalWorkspace } from "../workspace/local-validation";
 
 const router: IRouter = Router();
 function ownedProposal(proposalId: string, userId: string | undefined, res: Response) {
@@ -217,20 +218,16 @@ router.post("/ai/change-proposal/execute", async (req, res) => {
     const registered = owned;
     if (registered?.workspaceRoot) {
       recordLocalLifecycle(proposalId, "validating", "The approved local project is being checked before Preview.");
-      const localFiles = await Promise.all(registered.proposal.files.map(async (file) => {
-        const content = await (await import("node:fs/promises")).readFile(`${registered.workspaceRoot}/${file.path}`, "utf8");
-        return { path: file.path, content };
-      }));
-      const valid = localFiles.every((file) => file.content.length > 0);
-      if (!valid) {
+      const validation = await validateLocalWorkspace(registered.workspaceRoot, registered.proposal);
+      if (validation.status !== "pass") {
         await rejectAppliedProposal(proposalId);
-        recordLocalValidation(proposalId, false, "A generated project file was empty or unavailable.");
-        res.status(422).json({ ...result, status: "validation_failed", message: "Local workspace validation failed; changes were rolled back.", canUndo: false });
+        recordLocalValidation(proposalId, false, validation.summary);
+        res.json({ ...result, status: "validation_failed", message: `${validation.summary} Changes were rolled back; a new proposal and approval are required.`, canUndo: false, validation });
         return;
       }
       markProposalValidated(proposalId, true);
-      recordLocalValidation(proposalId, true, "Approved local project files are present.");
-      res.json({ ...result, typecheck: "pass", build: "pass", message: "Local files created and passed deterministic HTML workspace validation. Nothing has been committed or pushed.", validation: { taskId: "", status: "pass", checks: [{ name: "typecheck", status: "pass", details: "Local text files are present." }, { name: "build", status: "pass", details: "Local HTML entry point and linked assets are present." }], toolCallIds: [], summary: "Local workspace validation passed." } });
+      recordLocalValidation(proposalId, true, validation.summary);
+      res.json({ ...result, typecheck: validation.checks.find((check) => check.name === "typecheck")?.status ?? "pass", build: validation.checks.find((check) => check.name === "build")?.status ?? "pass", message: "Approved local operations passed deterministic validation. Nothing has been committed or pushed.", validation });
       return;
     }
     const session = beginProposalValidation(proposalId);

@@ -39,6 +39,7 @@ export function ChangeProposalReview({
   onCancel,
   onRegenerate,
   onApplied,
+  onValidationFailed,
   onCommitted,
   onPushed,
 }: {
@@ -46,6 +47,7 @@ export function ChangeProposalReview({
   onCancel: () => void;
   onRegenerate: () => void;
   onApplied: (result: ChangeExecutionResult) => void;
+  onValidationFailed?: (result: ChangeExecutionResult) => void;
   onCommitted?: (result: CommitResult) => void;
   onPushed?: (result: PushResult) => void;
 }) {
@@ -63,6 +65,9 @@ export function ChangeProposalReview({
   const riskClass = proposal.risk.toLowerCase();
   const createdFiles = proposal.files.filter((file) => file.operation === "create");
   const modifiedFiles = proposal.files.filter((file) => file.operation === "edit");
+  const deletedFiles = proposal.files.filter((file) => file.operation === "delete");
+  const renamedFiles = proposal.files.filter((file) => file.operation === "rename");
+  const createdDirectories = proposal.files.filter((file) => file.operation === "directory_create");
   const approve = async () => {
     setBusy(true); setError("");
     try {
@@ -84,9 +89,15 @@ export function ChangeProposalReview({
       setExecution(result);
       if (result.status === "applied") {
         onApplied(result);
-        const review = await getChangeProposalCommitReview({ proposalId: proposal.proposalId });
-        setCommitReview(review);
-        setPhase("commit_review");
+        try {
+          const review = await getChangeProposalCommitReview({ proposalId: proposal.proposalId });
+          setCommitReview(review);
+          setPhase("commit_review");
+        } catch {
+          // Local workspaces do not enter the optional GitHub commit flow.
+        }
+      } else if (result.status === "validation_failed") {
+        onValidationFailed?.(result);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Execution failed. No changes were applied.");
@@ -156,7 +167,9 @@ export function ChangeProposalReview({
     <div className="proposal-audit-summary" aria-label="Proposal audit summary">
       <span><strong>Created</strong>{createdFiles.length}</span>
       <span><strong>Modified</strong>{modifiedFiles.length}</span>
-      <span><strong>Deleted</strong>0</span>
+       <span><strong>Deleted</strong>{deletedFiles.length}</span>
+       <span><strong>Renamed</strong>{renamedFiles.length}</span>
+       <span><strong>Directories</strong>{createdDirectories.length}</span>
       <span className="audit-validation"><strong>Validation</strong>{execution ? execution.status === "applied" ? "Passed" : "Failed" : "Pending approval"}</span>
       <span className="audit-security"><strong>Security</strong>Server checks passed</span>
     </div>

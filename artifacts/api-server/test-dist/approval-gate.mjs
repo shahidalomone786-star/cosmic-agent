@@ -4713,7 +4713,8 @@ var CreateChangeProposalResponse = objectType({
   "risk": enumType(["LOW", "MEDIUM", "HIGH"]),
   "files": arrayType(objectType({
     "path": stringType(),
-    "operation": enumType(["create", "edit"]),
+    "operation": enumType(["create", "edit", "delete", "rename", "directory_create"]),
+    "fromPath": stringType().optional(),
     "language": stringType(),
     "originalCode": stringType(),
     "proposedCode": stringType(),
@@ -4725,7 +4726,9 @@ var CreateChangeProposalResponse = objectType({
   "affectedFiles": arrayType(stringType()),
   "addedLines": numberType(),
   "removedLines": numberType(),
-  "proposalId": stringType()
+  "proposalId": stringType(),
+  "plan": arrayType(stringType()),
+  "validationPlan": arrayType(stringType())
 });
 var ExecuteChangeProposalBody = objectType({
   "proposalId": stringType().min(1),
@@ -4982,7 +4985,7 @@ var ApprovalGateError = class extends Error {
 };
 var approvals = /* @__PURE__ */ new Map();
 function proposalVersion(proposal) {
-  return createHash("sha256").update(proposal.files.map((file) => `${file.path}\0${file.originalCode}\0${file.proposedCode}`).join("\n")).digest("hex");
+  return createHash("sha256").update(proposal.files.map((file) => `${file.operation}\0${file.fromPath ?? ""}\0${file.path}\0${file.originalCode}\0${file.proposedCode}`).join("\n")).digest("hex");
 }
 function repositorySha(repository, proposal) {
   return createHash("sha256").update(`${repository?.owner ?? ""}/${repository?.name ?? ""}@${repository?.branch ?? ""}

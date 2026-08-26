@@ -31,7 +31,7 @@ const approvals = new Map<string, ProposalApproval>();
 
 export function proposalVersion(proposal: ChangeProposal): string {
   return createHash("sha256")
-    .update(proposal.files.map((file) => `${file.path}\0${file.originalCode}\0${file.proposedCode}`).join("\n"))
+    .update(proposal.files.map((file) => `${file.operation}\0${file.fromPath ?? ""}\0${file.path}\0${file.originalCode}\0${file.proposedCode}`).join("\n"))
     .digest("hex");
 }
 

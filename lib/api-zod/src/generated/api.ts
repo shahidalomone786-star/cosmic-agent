@@ -810,7 +810,8 @@ export const CreateChangeProposalResponse = zod.object({
   "risk": zod.enum(['LOW', 'MEDIUM', 'HIGH']),
   "files": zod.array(zod.object({
   "path": zod.string(),
-  "operation": zod.enum(['create', 'edit']),
+  "operation": zod.enum(['create', 'edit', 'delete', 'rename', 'directory_create']),
+  "fromPath": zod.string().optional(),
   "language": zod.string(),
   "originalCode": zod.string(),
   "proposedCode": zod.string(),
@@ -822,7 +823,9 @@ export const CreateChangeProposalResponse = zod.object({
   "affectedFiles": zod.array(zod.string()),
   "addedLines": zod.number(),
   "removedLines": zod.number(),
-  "proposalId": zod.string()
+  "proposalId": zod.string(),
+  "plan": zod.array(zod.string()),
+  "validationPlan": zod.array(zod.string())
 })
 
 

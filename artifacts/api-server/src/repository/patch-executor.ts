@@ -65,7 +65,16 @@ export class PatchExecutionError extends Error {
   }
 }
 
-type Snapshot = { relativePath: string; absolutePath: string; content: string; exists: boolean };
+type Snapshot = {
+  relativePath: string;
+  absolutePath: string;
+  sourceRelativePath?: string;
+  sourceAbsolutePath?: string;
+  content: string;
+  exists: boolean;
+  targetExists: boolean;
+  operation: ChangeProposal["files"][number]["operation"];
+};
 type Session = {
   proposal: ChangeProposal;
   repository?: RepositoryRef;
@@ -115,6 +124,7 @@ export function registerProposal(proposal: ChangeProposal, repository?: Reposito
   for (const file of proposal.files) {
     const relative = safeRelative(file.path);
     if (binaryExtension.test(relative) || file.originalCode.includes("\0") || file.proposedCode.includes("\0")) throw new PatchExecutionError("binary_file", `Binary file edits are not supported: ${file.path}`);
+    if (file.fromPath) safeRelative(file.fromPath);
     if (Buffer.byteLength(file.proposedCode) > MAX_TEXT_BYTES) throw new PatchExecutionError("too_large", `File exceeds the safe size limit: ${file.path}`);
   }
   sessions.set(proposal.proposalId, { proposal, repository, provider, workspaceRoot, ownerId, projectId, snapshots: [], applied: false, undoAvailable: false, validated: false, staged: false });
@@ -153,20 +163,22 @@ export async function executeProposal(proposalId: string, approvalId?: string): 
   for (const file of session.proposal.files) {
     const relativePath = safeRelative(file.path);
     const absolutePath = path.join(session.workspaceRoot ?? executionRoot, relativePath);
-    let current = "";
-    let exists = true;
-    try {
-      current = await fs.readFile(absolutePath, "utf8");
-    } catch {
-      exists = false;
-    }
-    if (file.operation === "create") {
-      if (exists) throw new PatchExecutionError("stale_file", `New file already exists: ${relativePath}`);
+    const sourceRelativePath = file.operation === "rename" ? safeRelative(file.fromPath ?? "") : relativePath;
+    const sourceAbsolutePath = path.join(session.workspaceRoot ?? executionRoot, sourceRelativePath);
+    const sourceExists = await pathExists(sourceAbsolutePath);
+    const targetExists = await pathExists(absolutePath);
+    const current = sourceExists && file.operation === "rename" ? await readText(sourceAbsolutePath) : targetExists ? await readText(absolutePath) : "";
+    if (file.operation === "create" || file.operation === "directory_create") {
+      if (targetExists) throw new PatchExecutionError("stale_file", `New path already exists: ${relativePath}`);
+    } else if (file.operation === "rename") {
+      if (!sourceExists) throw new PatchExecutionError("not_found", `File not found in the local execution workspace: ${sourceRelativePath}`);
+      if (targetExists) throw new PatchExecutionError("stale_file", `Rename target already exists: ${relativePath}`);
+      if (current !== file.originalCode) throw new PatchExecutionError("stale_file", "File changed since this proposal was generated. Please regenerate the proposal.");
     } else {
-      if (!exists) throw new PatchExecutionError("not_found", `File not found in the local execution workspace: ${relativePath}`);
+      if (!targetExists) throw new PatchExecutionError("not_found", `File not found in the local execution workspace: ${relativePath}`);
       if (current !== file.originalCode) throw new PatchExecutionError("stale_file", "File changed since this proposal was generated. Please regenerate the proposal.");
     }
-    snapshots.push({ relativePath, absolutePath, content: current, exists });
+    snapshots.push({ relativePath, absolutePath, sourceRelativePath: file.operation === "rename" ? sourceRelativePath : undefined, sourceAbsolutePath: file.operation === "rename" ? sourceAbsolutePath : undefined, content: current, exists: sourceExists, targetExists, operation: file.operation });
   }
   session.snapshots = snapshots;
   try {
@@ -322,28 +334,53 @@ function safeRelative(input: string): string {
 async function writeAtomically(files: ChangeProposal["files"], snapshots: Snapshot[]): Promise<void> {
   const tempFiles: string[] = [];
   try {
-    for (const snapshot of snapshots) {
-      await fs.mkdir(path.dirname(snapshot.absolutePath), { recursive: true });
-    }
     for (const file of files) {
       const snapshot = snapshots.find((item) => item.relativePath === safeRelative(file.path));
       if (!snapshot) throw new PatchExecutionError("invalid_proposal", "Proposal file snapshot mismatch.");
-      const temp = `${snapshot.absolutePath}.cosmic-${process.pid}-${Date.now()}.tmp`;
-      await fs.writeFile(temp, file.proposedCode, "utf8");
-      tempFiles.push(temp);
+      if (file.operation === "directory_create") {
+        await fs.mkdir(snapshot.absolutePath, { recursive: true });
+      } else if (file.operation === "delete") {
+        await fs.rm(snapshot.absolutePath, { recursive: false, force: false });
+      } else if (file.operation === "rename") {
+        await fs.mkdir(path.dirname(snapshot.absolutePath), { recursive: true });
+        await fs.rename(snapshot.sourceAbsolutePath!, snapshot.absolutePath);
+      } else {
+        await fs.mkdir(path.dirname(snapshot.absolutePath), { recursive: true });
+        const temp = `${snapshot.absolutePath}.cosmic-${process.pid}-${Date.now()}.tmp`;
+        await fs.writeFile(temp, file.proposedCode, "utf8");
+        tempFiles.push(temp);
+        await fs.rename(temp, snapshot.absolutePath);
+      }
     }
-    for (let i = 0; i < files.length; i++) await fs.rename(tempFiles[i], snapshots[i].absolutePath);
   } finally {
     await Promise.all(tempFiles.map((temp) => fs.unlink(temp).catch(() => undefined)));
   }
 }
 
 async function restoreSnapshots(snapshots: Snapshot[]): Promise<void> {
-  await Promise.all(snapshots.map((snapshot) =>
-    snapshot.exists
-      ? fs.writeFile(snapshot.absolutePath, snapshot.content, "utf8")
-      : fs.unlink(snapshot.absolutePath).catch(() => undefined),
-  ));
+  for (const snapshot of [...snapshots].reverse()) {
+    if (snapshot.operation === "rename") {
+      if (await pathExists(snapshot.absolutePath)) {
+        await fs.mkdir(path.dirname(snapshot.sourceAbsolutePath!), { recursive: true });
+        await fs.rename(snapshot.absolutePath, snapshot.sourceAbsolutePath!);
+      }
+      continue;
+    }
+    if (snapshot.operation === "directory_create") {
+      if (await pathExists(snapshot.absolutePath)) {
+        try { await fs.rmdir(snapshot.absolutePath); } catch (error) {
+          throw new PatchExecutionError("stale_file", "A created directory is no longer empty; it was not removed.");
+        }
+      }
+      continue;
+    }
+    if (snapshot.operation === "delete" || snapshot.operation === "edit") {
+      await fs.mkdir(path.dirname(snapshot.absolutePath), { recursive: true });
+      await fs.writeFile(snapshot.absolutePath, snapshot.content, "utf8");
+    } else {
+      await fs.unlink(snapshot.absolutePath).catch(() => undefined);
+    }
+  }
 }
 
 async function verifyValidatedFiles(session: Session): Promise<void> {
@@ -355,6 +392,9 @@ async function verifyValidatedFiles(session: Session): Promise<void> {
     if (!file || file.proposedCode.includes("\0") || protectedPath.test(snapshot.relativePath) || protectedAuth.test(snapshot.relativePath)) {
       throw new PatchExecutionError("protected_file", "Protected or invalid files cannot be committed.");
     }
+    if (file.operation === "delete" || file.operation === "rename" || file.operation === "directory_create") {
+      throw new PatchExecutionError("invalid_proposal", "Only file create/edit proposals can be committed to GitHub.");
+    }
     let current: string;
     try {
       current = await fs.readFile(snapshot.absolutePath, "utf8");
@@ -365,6 +405,15 @@ async function verifyValidatedFiles(session: Session): Promise<void> {
       throw new PatchExecutionError("stale_file", "A validated file changed after validation. Commit was cancelled.");
     }
   }
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try { await fs.lstat(target); return true; } catch { return false; }
+}
+
+async function readText(target: string): Promise<string> {
+  try { return await fs.readFile(target, "utf8"); }
+  catch { throw new PatchExecutionError("binary_file", `The workspace path is not a readable text file: ${target}`); }
 }
 
 async function runValidation(): Promise<{ ok: boolean; typecheck: string; build: string; message: string }> {

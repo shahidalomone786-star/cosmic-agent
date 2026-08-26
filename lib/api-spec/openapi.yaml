@@ -1061,7 +1061,8 @@ components:
         path: { type: string }
         operation:
           type: string
-          enum: [create, edit]
+          enum: [create, edit, delete, rename, directory_create]
+        fromPath: { type: string }
         language: { type: string }
         originalCode: { type: string }
         proposedCode: { type: string }
@@ -1091,7 +1092,9 @@ components:
         addedLines: { type: number }
         removedLines: { type: number }
         proposalId: { type: string }
-      required: [status, summary, explanation, risk, files, affectedFiles, addedLines, removedLines, proposalId]
+        plan: { type: array, items: { type: string } }
+        validationPlan: { type: array, items: { type: string } }
+      required: [status, summary, explanation, risk, files, affectedFiles, addedLines, removedLines, proposalId, plan, validationPlan]
     ExecuteChangeProposalInput:
       type: object
       properties:

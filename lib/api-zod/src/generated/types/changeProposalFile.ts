@@ -10,6 +10,7 @@ import type { ChangeProposalFileOperation } from './changeProposalFileOperation'
 export interface ChangeProposalFile {
   path: string;
   operation: ChangeProposalFileOperation;
+  fromPath?: string;
   language: string;
   originalCode: string;
   proposedCode: string;
