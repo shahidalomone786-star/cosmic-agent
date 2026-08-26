@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Cosmic Racing Game</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: Arial, sans-serif;
+            background: #111;
+            color: #eee;
+            margin: 0;
+            padding: 20px;
+        }
+        #gameCanvas {
+            border: 2px solid #555;
+            background: #222;
+        }
+        #score {
+            margin-top: 10px;
+            font-size: 1.2em;
+        }
+        #restartBtn {
+            margin-top: 10px;
+            padding: 8px 16px;
+            font-size: 1em;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <div id="score">Score: 0</div>
+    <button id="restartBtn">Restart Game</button>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const restartBtn = document.getElementById('restartBtn');
+
+        const car = {
+            width: 40,
+            height: 80,
+            x: canvas.width / 2 - 20,
+            y: canvas.height - 90,
+            speed: 5,
+            moveLeft: false,
+            moveRight: false
+        };
+
+        let obstacles = [];
+        let score = 0;
+        let gameInterval;
+        let obstacleInterval;
+        let isGameOver = false;
+
+        function initGame() {
+            car.x = canvas.width / 2 - car.width / 2;
+            obstacles = [];
+            score = 0;
+            isGameOver = false;
+            scoreEl.textContent = 'Score: 0';
+            if (gameInterval) clearInterval(gameInterval);
+            if (obstacleInterval) clearInterval(obstacleInterval);
+            gameInterval = setInterval(update, 20);
+            obstacleInterval = setInterval(spawnObstacle, 1500);
+        }
+
+        function spawnObstacle() {
+            const size = Math.random() * 30 + 20;
+            const xPos = Math.random() * (canvas.width - size);
+            obstacles.push({
+                x: xPos,
+                y: -size,
+                width: size,
+                height: size,
+                speed: Math.random() * 2 + 1
+            });
+        }
+
+        function update() {
+            if (isGameOver) return;
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Move car
+            if (car.moveLeft && car.x > 0) car.x -= car.speed;
+            if (car.moveRight && car.x + car.width < canvas.width) car.x += car.speed;
+
+            // Draw car
+            ctx.fillStyle = '#0f0';
+            ctx.fillRect(car.x, car.y, car.width, car.height);
+
+            // Update and draw obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                const obs = obstacles[i];
+                obs.y += obs.speed;
+                ctx.fillStyle = '#f00';
+                ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+
+                // Collision detection
+                if (rectIntersect(car, obs)) {
+                    endGame();
+                    return;
+                }
+
+                // Remove off-screen obstacles
+                if (obs.y > canvas.height) {
+                    obstacles.splice(i, 1);
+                    score += 1;
+                    scoreEl.textContent = 'Score: ' + score;
+                }
+            }
+        }
+
+        function rectIntersect(a, b) {
+            return !(
+                a.x + a.width < b.x ||
+                a.x > b.x + b.width ||
+                a.y + a.height < b.y ||
+                a.y > b.y + b.height
+            );
+        }
+
+        function endGame() {
+            isGameOver = true;
+            clearInterval(gameInterval);
+            clearInterval(obstacleInterval);
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#fff';
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2);
+        }
+
+        // Keyboard controls
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'ArrowLeft') car.moveLeft = true;
+            if (e.code === 'ArrowRight') car.moveRight = true;
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'ArrowLeft') car.moveLeft = false;
+            if (e.code === 'ArrowRight') car.moveRight = false;
+        });
+
+        restartBtn.addEventListener('click', initGame);
+
+        // Start the game on load
+        initGame();
+    </script>
+</body>
+</html>

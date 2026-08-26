@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Cosmic Agent"
+description = "A professional, reusable coding-agent workspace for connecting repositories, planning changes, and reviewing agent activity with explicit user control."
+version = "1.0.0"
+id = "artifacts/cosmic-agent"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23391
+
+[services.development]
+run = "pnpm --filter @workspace/cosmic-agent run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/cosmic-agent", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/cosmic-agent/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23391"
+BASE_PATH = "/"

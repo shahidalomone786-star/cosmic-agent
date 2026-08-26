@@ -1,0 +1,1356 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: ai
+    description: Provider-backed AI operations
+  - name: agent
+    description: Bounded, approval-gated agent runtime
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /ai/models:
+    get:
+      operationId: listAiModels
+      tags: [ai]
+      summary: List enabled AI models
+      description: Returns the approved model registry without provider credentials.
+      responses:
+        "200":
+          description: Enabled model registry
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AiModel"
+  /ai/resources:
+    get:
+      operationId: getAiResources
+      tags: [ai]
+      summary: Get safe AI, GitHub, and context resource status
+      description: Returns operational metadata only. Secrets, credentials, and filesystem paths are never returned.
+      responses:
+        "200":
+          description: Resource status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceStatus"
+  /ai/chat:
+    post:
+      operationId: sendAiMessage
+      tags: [ai]
+      summary: Send a message to an approved AI model
+      description: Sends a conversation to the server-side provider layer. Provider credentials are never accepted from or returned to the client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiChatInput"
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiChatResponse"
+        "400":
+          description: Invalid request or unapproved model
+        "429":
+          description: Provider rate limit
+        "503":
+          description: Provider unavailable or not configured
+  /ai/agent/tools:
+    get:
+      operationId: listAgentTools
+      tags: [agent]
+      summary: List the bounded agent tool registry
+      description: Returns read-only and approval-gated tools. No shell or arbitrary write tools are exposed.
+      responses:
+        "200":
+          description: Bounded tool definitions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentToolDefinition"
+  /ai/agent/sessions:
+    post:
+      operationId: createAgentSession
+      tags: [agent]
+      summary: Run a bounded approval-gated agent session
+      description: Runs the task understanding, context retrieval, and proposal loop within a fixed iteration limit. Human approval remains required before execution, validation, commit, or push.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentSessionInput"
+      responses:
+        "201":
+          description: Agent session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSession"
+        "400":
+          description: Invalid agent request
+  /ai/agent/sessions/{sessionId}:
+    get:
+      operationId: getAgentSession
+      tags: [agent]
+      summary: Read agent session progress
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Agent session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSession"
+        "404":
+          description: Session not found
+  /ai/agent/sessions/{sessionId}/tools:
+    post:
+      operationId: requestAgentTool
+      tags: [agent]
+      summary: Request one bounded agent tool
+      description: The server validates the registered tool, permission, timeout, and bounded result. Approval-required tools are never executable through this endpoint.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentToolRequest"
+      responses:
+        "200":
+          description: Compact tool result
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Unknown tool, malformed input, bounded session, or unavailable session
+        "403":
+          description: Explicit approval required
+        "504":
+          description: Tool timeout
+  /ai/agent/sessions/{sessionId}/workers/{role}/tools:
+    post:
+      operationId: requestWorkerTool
+      tags: [agent]
+      summary: Request a read-only worker tool
+      description: Server validates worker role, permissions, safe paths, and generates the real tool trace. Workers cannot write, commit, push, or run builds.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: role
+          in: path
+          required: true
+          schema: { type: string, enum: [frontend, backend] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkerToolRequest" }
+      responses:
+        "200":
+          description: Bounded tool result with server-generated trace identity
+        "400":
+          description: Invalid request
+        "403":
+          description: Worker permission denied
+  /ai/agent/worker-reports:
+    post:
+      operationId: submitWorkerReport
+      tags: [agent]
+      summary: Validate and accept a worker report
+      description: Worker reports are schema-validated and validation claims are checked against real server tool traces.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkerReport" }
+      responses:
+        "200":
+          description: Worker report with server-verified validation claim
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report: { $ref: "#/components/schemas/WorkerReport" }
+                  validation: { $ref: "#/components/schemas/ValidationClaim" }
+                required: [report, validation]
+        "400":
+          description: Invalid worker report
+  /ai/agent/reviews:
+    post:
+      operationId: reviewAgentProposal
+      tags: [agent]
+      summary: Review a proposal using server-verified evidence
+      description: Independent reviewer analysis. Evidence is accepted only when its source tool call is a completed server trace for the current task. Approval remains a separate human decision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewRequest" }
+      responses:
+        "200":
+          description: Structured reviewer result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewResult" }
+        "400":
+          description: Invalid review request
+  /ai/chat/stream:
+    post:
+      operationId: streamAiMessage
+      tags: [ai]
+      summary: Stream a response from an approved AI model
+      description: Streams server-side provider output as server-sent events. Provider credentials are never accepted from or returned to the client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiChatInput"
+      responses:
+        "200":
+          description: Server-sent response stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Invalid request or unapproved model
+        "429":
+          description: Provider rate limit
+        "503":
+          description: Provider unavailable or not configured
+  /ai/change-proposal:
+    post:
+      operationId: createChangeProposal
+      tags: [ai]
+      summary: Generate a validated proposal-only code change
+      description: Generates a bounded, validated diff preview. It never writes to GitHub, commits, pushes, deletes, or executes commands.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeProposalInput"
+      responses:
+        "200":
+          description: Validated code change proposal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeProposal"
+        "400":
+          description: Invalid request, insufficient context, malformed model response, or invalid patch
+        "403":
+          description: Protected file or repository permission error
+        "404":
+          description: File not found
+        "429":
+          description: GitHub or provider rate limit
+        "422":
+          description: Binary, oversized, or non-applying change
+        "503":
+          description: Provider or repository unavailable
+  /ai/change-proposal/execute:
+    post:
+      operationId: executeChangeProposal
+      tags: [ai]
+      summary: Apply an approved proposal locally and validate it
+      description: Applies only a server-held proposal after explicit approval. Never commits or pushes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecuteChangeProposalInput"
+      responses:
+        "200":
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChangeExecutionResult"
+  /ai/change-proposal/approve:
+    post:
+      tags: [ai]
+      summary: Record explicit user approval for one exact proposal
+      description: Creates a server-held approval binding. It does not modify files.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Approval recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProposalApproval"
+        "401": { description: Authenticated user required }
+        "404": { description: Proposal not found }
+        "400":
+          description: Invalid or already handled proposal
+        "409":
+          description: File changed since proposal generation
+        "403":
+          description: Protected file or unsafe path
+        "422":
+          description: Invalid patch or validation failure
+  /ai/change-proposal/undo:
+    post:
+      operationId: undoChangeProposal
+      tags: [ai]
+      summary: Undo a previously applied local proposal
+      description: Restores the exact server-held pre-apply snapshot. Never commits or pushes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Undo result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProposalActionResult"
+        "400":
+          description: Invalid or unavailable proposal
+  /ai/change-proposal/commit-review:
+    post:
+      operationId: getChangeProposalCommitReview
+      tags: [ai]
+      summary: Review a validated local change before commit approval
+      description: Returns a server-verified commit review. No GitHub write occurs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Commit review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitReview"
+        "400":
+          description: Proposal has not passed local validation
+        "409":
+          description: Validated files changed after local validation
+  /ai/change-proposal/commit:
+    post:
+      operationId: commitChangeProposal
+      tags: [ai]
+      summary: Commit an approved validated local change
+      description: Requires explicit commit approval. The configured GitHub provider performs no operation until enabled.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitChangeProposalInput"
+      responses:
+        "200":
+          description: Commit result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommitResult"
+        "400":
+          description: Invalid proposal or commit message
+        "403":
+          description: Protected file rejected
+        "409":
+          description: Repository or branch conflict
+        "503":
+          description: GITHUB_PROVIDER_NOT_CONFIGURED
+  /ai/change-proposal/push-review:
+    post:
+      operationId: getChangeProposalPushReview
+      tags: [ai]
+      summary: Review a created commit before push approval
+      description: Returns a server-held commit for explicit push confirmation. No push occurs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Push review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushReview"
+        "400":
+          description: No approved commit exists
+  /ai/change-proposal/push:
+    post:
+      operationId: pushChangeProposal
+      tags: [ai]
+      summary: Push an approved commit without force
+      description: Requires explicit push approval. The configured GitHub provider compares remote HEAD and never force-pushes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposalActionInput"
+      responses:
+        "200":
+          description: Push result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushResult"
+        "400":
+          description: No approved commit exists
+        "409":
+          description: Remote branch changed
+        "503":
+          description: GITHUB_PROVIDER_NOT_CONFIGURED
+  /repository/connect:
+    post:
+      operationId: connectRepository
+      tags: [repository]
+      summary: Connect a read-only GitHub repository
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryConnectInput"
+      responses:
+        "200":
+          description: Repository metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryRef"
+        "400":
+          description: Invalid repository URL
+        "403":
+          description: Repository requires authorization
+  /repository/tree:
+    post:
+      operationId: listRepositoryTree
+      tags: [repository]
+      summary: List one directory from a connected repository
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryTreeInput"
+      responses:
+        "200":
+          description: Directory entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RepositoryEntry"
+  /repository/file:
+    post:
+      operationId: readRepositoryFile
+      tags: [repository]
+      summary: Read a protected text file from a repository
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryFileInput"
+      responses:
+        "200":
+          description: File content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryFile"
+  /repository/search:
+    post:
+      operationId: searchRepository
+      tags: [repository]
+      summary: Search readable repository source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositorySearchInput"
+      responses:
+        "200":
+          description: Search matches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RepositorySearchResult"
+  /repository/overview:
+    post:
+      operationId: getRepositoryOverview
+      tags: [repository]
+      summary: Get a cached read-only repository intelligence overview
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepositoryTreeInput"
+      responses:
+        "200":
+          description: Repository structure, classifications, and dependency relationships
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryOverview"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    AiModel:
+      type: object
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        provider:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        contextWindow:
+          type: [number, "null"]
+        enabled:
+          type: boolean
+        recommended:
+          type: boolean
+      required:
+        - id
+        - displayName
+        - provider
+        - capabilities
+        - contextWindow
+        - enabled
+        - recommended
+    ResourceStatus:
+      type: object
+      properties:
+        ai:
+          type: object
+          properties:
+            provider: { type: string }
+            status: { type: string, enum: [healthy, limited, unavailable] }
+            configuredKeyCount: { type: number }
+            availableKeyCount: { type: number }
+            keys:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string, enum: [healthy, cooldown, unavailable] }
+                  cooldownUntil: { type: [number, "null"] }
+                  rateLimitCount: { type: number }
+                required: [id, status, rateLimitCount]
+          required: [provider, status, configuredKeyCount, availableKeyCount, keys]
+        github:
+          type: object
+          properties:
+            api: { type: string, enum: [healthy, low, exhausted, unknown] }
+            message: { type: string }
+            remaining: { type: [number, "null"] }
+            limit: { type: [number, "null"] }
+            resetAt: { type: [number, "null"] }
+            cache:
+              type: object
+              properties:
+                status: { type: string, enum: [warm, cold] }
+                hits: { type: number }
+                misses: { type: number }
+              required: [status, hits, misses]
+          required: [api, message, remaining, limit, resetAt, cache]
+        context:
+          type: object
+          properties:
+            filesIncluded: { type: number }
+            approximateChars: { type: number }
+            chunked: { type: boolean }
+            lastWarnings: { type: array, items: { type: string } }
+          required: [filesIncluded, approximateChars, chunked, lastWarnings]
+      required: [ai, github, context]
+    AiChatMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string
+      required:
+        - role
+        - content
+    AiChatInput:
+      type: object
+      properties:
+        model:
+          type: string
+          minLength: 1
+        messages:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AiChatMessage"
+        temperature:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 2
+        repositoryContext:
+          type: object
+          properties:
+            repository:
+              $ref: "#/components/schemas/RepositoryRef"
+            paths:
+              type: array
+              items: { type: string }
+          required: [repository, paths]
+      required:
+        - model
+        - messages
+    AiChatResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        model:
+          type: string
+        content:
+          type: string
+        provider:
+          type: string
+        repositoryContext:
+          $ref: "#/components/schemas/RepositoryContextUsed"
+      required:
+        - id
+        - model
+        - content
+        - provider
+    AgentToolDefinition:
+      type: object
+      properties:
+        name: { type: string }
+        permission: { type: string, enum: [read, proposal, approval_required] }
+        schema:
+          type: object
+          additionalProperties: { type: string }
+      required: [name, permission, schema]
+    AgentToolRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        input:
+          type: object
+          additionalProperties: true
+      required: [name]
+    AgentSessionInput:
+      type: object
+      properties:
+        task: { type: string, minLength: 1, maxLength: 2000 }
+        model: { type: string, minLength: 1 }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        paths: { type: array, items: { type: string }, maxItems: 20 }
+      required: [task, model]
+    AgentSession:
+      type: object
+      properties:
+        id: { type: string }
+        task: { type: string }
+        status: { type: string, enum: [running, waiting_approval, completed, failed] }
+        currentStep: { type: string, enum: [understand, plan, retrieve_context, act, observe, verify, complete] }
+        iteration: { type: number }
+        maxIterations: { type: number }
+        plan:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              title: { type: string }
+              status: { type: string, enum: [pending, active, complete, blocked] }
+            required: [id, title, status]
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        selectedFiles: { type: array, items: { type: string } }
+        activeModel: { type: string }
+        provider: { type: string }
+        classification:
+          $ref: "#/components/schemas/TaskClassification"
+        managerPlan:
+          $ref: "#/components/schemas/AgentPlan"
+        managerDecision:
+          $ref: "#/components/schemas/ManagerDecision"
+        managerReplanCount: { type: number }
+        currentState:
+          type: string
+          enum: [UNDERSTANDING, CLASSIFYING, PLANNING, DECOMPOSING, EXECUTING, REVIEWING, VALIDATING, PROPOSING, WAITING_FOR_APPROVAL, APPLYING, COMPLETED, FAILED, BLOCKED, WAITING_FOR_PROVIDER]
+        contextMemory:
+          $ref: "#/components/schemas/AgentContextMemory"
+        toolTraces:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCallTrace"
+        providerBudget:
+          $ref: "#/components/schemas/ProviderBudget"
+        context:
+          type: object
+          properties:
+            filesIncluded: { type: number }
+            approximateChars: { type: number }
+            chunked: { type: boolean }
+            warnings: { type: array, items: { type: string } }
+            offloadedResultId: { type: string }
+          required: [filesIncluded, approximateChars, chunked, warnings]
+        toolResults:
+          type: array
+          items:
+            type: object
+            properties:
+              tool: { type: string }
+              status: { type: string, enum: [complete, failed] }
+              summary: { type: string }
+            required: [tool, status, summary]
+        proposal:
+          type: object
+          properties:
+            proposalId: { type: string }
+            files: { type: array, items: { type: string } }
+            risk: { type: string }
+            summary: { type: string }
+          required: [proposalId, files, risk, summary]
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              type: { type: string }
+              label: { type: string }
+              detail: { type: string }
+              timestamp: { type: string }
+            required: [id, type, label, timestamp]
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      required: [id, task, status, currentStep, iteration, maxIterations, plan, selectedFiles, activeModel, provider, classification, managerPlan, managerDecision, managerReplanCount, currentState, contextMemory, toolTraces, providerBudget, context, toolResults, events, createdAt, updatedAt]
+    TaskClassification:
+      type: object
+      properties:
+        category: { type: string, enum: [SIMPLE, MODERATE, COMPLEX, REVIEW_ONLY, CLARIFICATION_REQUIRED] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        reason: { type: string }
+        estimatedToolCalls: { type: number }
+        estimatedModelCalls: { type: number }
+      required: [category, confidence, reason, estimatedToolCalls, estimatedModelCalls]
+    AgentPlan:
+      type: object
+      properties:
+        taskId: { type: string }
+        goal: { type: string }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/PlanStep" }
+        dependencies:
+          type: array
+          items: { $ref: "#/components/schemas/TaskDependency" }
+        estimatedToolCalls: { type: number }
+        estimatedModelCalls: { type: number }
+        complexity: { type: string, enum: [SIMPLE, MODERATE, COMPLEX, REVIEW_ONLY] }
+        status: { type: string, enum: [PENDING, ACTIVE, COMPLETED, FAILED, BLOCKED] }
+      required: [taskId, goal, steps, dependencies, estimatedToolCalls, estimatedModelCalls, complexity, status]
+    PlanStep:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [PENDING, ACTIVE, COMPLETED, FAILED, BLOCKED] }
+        assignedRole: { type: string, enum: [manager, frontend, backend, reviewer, validator] }
+        dependencies: { type: array, items: { type: string } }
+      required: [id, title, description, status, dependencies]
+    TaskDependency:
+      type: object
+      properties:
+        fromStep: { type: string }
+        toStep: { type: string }
+        reason: { type: string }
+      required: [fromStep, toStep, reason]
+    ManagerDecision:
+      oneOf:
+        - type: object
+          properties:
+            action: { type: string, enum: [decompose] }
+            subtasks: { type: array, maxItems: 6, items: { type: object, additionalProperties: true } }
+          required: [action, subtasks]
+        - type: object
+          properties:
+            action: { type: string, enum: [replan] }
+            reason: { type: string }
+            revisedPlan: { $ref: "#/components/schemas/AgentPlan" }
+          required: [action, reason, revisedPlan]
+        - type: object
+          properties:
+            action: { type: string, enum: [request-user-input] }
+            question: { type: string }
+          required: [action, question]
+        - type: object
+          properties:
+            action: { type: string, enum: [finalize] }
+            reason: { type: string }
+          required: [action, reason]
+        - type: object
+          properties:
+            action: { type: string, enum: [blocked] }
+            reason: { type: string }
+          required: [action, reason]
+    AgentContextMemory:
+      type: object
+      properties:
+        taskSummary: { type: string }
+        explicitFiles: { type: array, items: { type: string } }
+        relevantFiles: { type: array, items: { type: string } }
+        completedToolCalls: { type: array, items: { type: string } }
+        activePlanStep: { type: string }
+        importantFindings: { type: array, items: { type: string } }
+        unresolvedQuestions: { type: array, items: { type: string } }
+        contextVersion: { type: number }
+      required: [taskSummary, explicitFiles, relevantFiles, completedToolCalls, importantFindings, unresolvedQuestions, contextVersion]
+    ToolCallTrace:
+      type: object
+      properties:
+        toolCallId: { type: string }
+        taskId: { type: string }
+        role: { type: string, enum: [manager, frontend, backend, reviewer, validator] }
+        tool: { type: string }
+        status: { type: string, enum: [requested, running, completed, failed, denied, timeout] }
+        startedAt: { type: string }
+        completedAt: { type: string }
+        inputSummary: { type: string }
+        outputSummary: { type: string }
+        evidence:
+          type: object
+          properties:
+            summary: { type: string }
+            content: { type: string }
+          required: [summary, content]
+        errorCode: { type: string }
+      required: [toolCallId, taskId, role, tool, status, startedAt, inputSummary]
+    ValidationClaim:
+      type: object
+      properties:
+        status: { type: string, enum: [pass, fail, not-verified] }
+        sourceToolCallId: { type: string }
+        summary: { type: string, minLength: 1 }
+      required: [status, summary]
+    ValidationCheck:
+      type: object
+      properties:
+        name: { type: string }
+        status: { type: string, enum: [pass, fail, not-verified] }
+        sourceToolCallId: { type: string }
+        details: { type: string }
+      required: [name, status, details]
+    ValidationResult:
+      type: object
+      properties:
+        taskId: { type: string }
+        status: { type: string, enum: [pass, fail, not-verified] }
+        checks: { type: array, items: { $ref: "#/components/schemas/ValidationCheck" } }
+        toolCallIds: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [taskId, status, checks, toolCallIds, summary]
+    WorkerFinding:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        file: { type: string }
+        evidenceToolCallId: { type: string }
+      required: [title, description]
+    FileProposal:
+      type: object
+      properties:
+        path: { type: string }
+        diff: { type: string }
+        rationale: { type: string }
+        risk: { type: string, enum: [low, medium, high] }
+        addedLines: { type: number }
+        removedLines: { type: number }
+      required: [path, diff, rationale, risk, addedLines, removedLines]
+    WorkerReport:
+      type: object
+      properties:
+        role: { type: string, enum: [frontend, backend, reviewer, validator] }
+        taskId: { type: string }
+        subtaskId: { type: string }
+        filesInspected: { type: array, items: { type: string } }
+        relevantFiles: { type: array, items: { type: string } }
+        findings: { type: array, items: { $ref: "#/components/schemas/WorkerFinding" } }
+        proposals: { type: array, items: { $ref: "#/components/schemas/FileProposal" } }
+        dependencies: { type: array, items: { type: string } }
+        dependencyFindings:
+          type: array
+          items: { $ref: "#/components/schemas/DependencyFinding" }
+        conflicts:
+          type: array
+          items: { $ref: "#/components/schemas/ConflictFinding" }
+        validation: { $ref: "#/components/schemas/ValidationClaim" }
+        toolCallIds: { type: array, items: { type: string } }
+        tokensUsed: { type: number }
+        status: { type: string, enum: [completed, blocked, failed] }
+      required: [role, taskId, subtaskId, filesInspected, relevantFiles, findings, proposals, dependencies, validation, toolCallIds, status]
+    DependencyFinding:
+      type: object
+      properties:
+        description: { type: string }
+        fromRole: { type: string, enum: [frontend, backend, reviewer] }
+        toRole: { type: string, enum: [frontend, backend, reviewer] }
+        status: { type: string, enum: [reported, verified, conflict] }
+        evidenceToolCallId: { type: string }
+      required: [description, fromRole, toRole, status]
+    ConflictFinding:
+      type: object
+      properties:
+        claim: { type: string }
+        parties: { type: array, minItems: 2, maxItems: 3, items: { type: string, enum: [frontend, backend, reviewer] } }
+        status: { type: string, enum: [unresolved, resolved] }
+        resolution: { type: string }
+      required: [claim, parties, status]
+    EvidenceCheck:
+      type: object
+      properties:
+        claim: { type: string }
+        evidence: { type: string }
+        sourceToolCallId: { type: string }
+        critical: { type: boolean }
+        result: { type: string, enum: [match, mismatch, insufficient] }
+      required: [claim, evidence, sourceToolCallId, critical]
+    ReviewRequest:
+      type: object
+      properties:
+        taskId: { type: string }
+        proposalFiles: { type: array, items: { type: string }, maxItems: 50 }
+        groundedFindings: { type: array, items: { $ref: "#/components/schemas/EvidenceCheck" }, maxItems: 50 }
+        dependencies: { type: array, items: { $ref: "#/components/schemas/DependencyFinding" }, maxItems: 30 }
+        conflicts: { type: array, items: { $ref: "#/components/schemas/ConflictFinding" }, maxItems: 20 }
+        workerReports: { type: array, items: { $ref: "#/components/schemas/WorkerReport" }, maxItems: 10 }
+        notes: { type: string }
+      required: [taskId, groundedFindings]
+    ReviewResult:
+      type: object
+      properties:
+        taskId: { type: string }
+        verdict: { type: string, enum: [approve, request-changes, reject] }
+        groundedFindings: { type: array, items: { $ref: "#/components/schemas/EvidenceCheck" } }
+        freeTextNotes: { type: string }
+        toolCallIds: { type: array, items: { type: string } }
+        reviewerStatus: { type: string, enum: [completed, blocked, failed] }
+      required: [taskId, verdict, groundedFindings, toolCallIds, reviewerStatus]
+    WorkerToolRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1 }
+        input: { type: object, additionalProperties: true }
+      required: [name]
+    WorkerContext:
+      type: object
+      properties:
+        role: { type: string, enum: [frontend, backend, reviewer, validator] }
+        taskId: { type: string }
+        task: { type: string }
+        explicitFiles: { type: array, items: { type: string } }
+        assignedFiles: { type: array, items: { type: string } }
+        relevantFiles: { type: array, items: { type: string } }
+        contextMemory: { $ref: "#/components/schemas/AgentContextMemory" }
+        priorToolCallIds: { type: array, items: { type: string } }
+      required: [role, taskId, task, explicitFiles, assignedFiles, relevantFiles, contextMemory, priorToolCallIds]
+    ProviderBudget:
+      type: object
+      properties:
+        estimatedCalls: { type: number }
+        estimatedTokens: { type: number }
+        remainingCalls: { type: number }
+        remainingTokens: { type: number }
+        status: { type: string, enum: [available, limited, cooldown, unknown] }
+      required: [estimatedCalls, estimatedTokens, status]
+    ChangeProposalInput:
+      type: object
+      properties:
+        model:
+          type: string
+          minLength: 1
+        request:
+          type: string
+          minLength: 1
+        repositoryContext:
+          type: object
+          properties:
+            repository:
+              $ref: "#/components/schemas/RepositoryRef"
+            paths:
+              type: array
+              items: { type: string }
+          required: [repository, paths]
+      required: [model, request, repositoryContext]
+    ChangeProposalFile:
+      type: object
+      properties:
+        path: { type: string }
+        operation:
+          type: string
+          enum: [create, edit, delete, rename, directory_create]
+        fromPath: { type: string }
+        language: { type: string }
+        originalCode: { type: string }
+        proposedCode: { type: string }
+        diff: { type: string }
+        explanation: { type: string }
+        addedLines: { type: number }
+        removedLines: { type: number }
+      required: [path, operation, language, originalCode, proposedCode, diff, explanation, addedLines, removedLines]
+    ChangeProposal:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [proposal]
+        summary: { type: string }
+        explanation: { type: string }
+        risk:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChangeProposalFile"
+        affectedFiles:
+          type: array
+          items: { type: string }
+        addedLines: { type: number }
+        removedLines: { type: number }
+        proposalId: { type: string }
+        plan: { type: array, items: { type: string } }
+        validationPlan: { type: array, items: { type: string } }
+      required: [status, summary, explanation, risk, files, affectedFiles, addedLines, removedLines, proposalId, plan, validationPlan]
+    ExecuteChangeProposalInput:
+      type: object
+      properties:
+        proposalId: { type: string, minLength: 1 }
+        approvalId: { type: string, minLength: 1 }
+      required: [proposalId, approvalId]
+    ProposalApproval:
+      type: object
+      properties:
+        approvalId: { type: string }
+        taskId: { type: string }
+        proposalId: { type: string }
+        proposalVersion: { type: string }
+        repositorySha: { type: string }
+        fileHashes:
+          type: object
+          additionalProperties: { type: string }
+        approvedAt: { type: string }
+        approvedByUser: { type: string }
+        action:
+          type: string
+          enum: [apply, commit, push]
+      required: [approvalId, proposalId, proposalVersion, repositorySha, fileHashes, approvedAt, approvedByUser, action]
+    ProposalActionInput:
+      type: object
+      properties:
+        proposalId: { type: string, minLength: 1 }
+      required: [proposalId]
+    ChangeExecutionResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [applied, validation_failed]
+        proposalId: { type: string }
+        files: { type: array, items: { type: string } }
+        addedLines: { type: number }
+        removedLines: { type: number }
+        typecheck: { type: string }
+        build: { type: string }
+        message: { type: string }
+        canUndo: { type: boolean }
+        validation: { $ref: "#/components/schemas/ValidationResult" }
+      required: [status, proposalId, files, addedLines, removedLines, typecheck, build, message, canUndo]
+    ProposalActionResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [undone]
+        proposalId: { type: string }
+        message: { type: string }
+      required: [status, proposalId, message]
+    CommitReview:
+      type: object
+      properties:
+        status: { type: string, enum: [ready_to_commit] }
+        proposalId: { type: string }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        branch: { type: string }
+        files: { type: array, items: { type: string } }
+        addedLines: { type: number }
+        removedLines: { type: number }
+        diffSummary: { type: string }
+        validation: { type: string, enum: [passed] }
+      required: [status, proposalId, repository, branch, files, addedLines, removedLines, diffSummary, validation]
+    CommitChangeProposalInput:
+      type: object
+      properties:
+        proposalId: { type: string, minLength: 1 }
+        approvalId: { type: string, minLength: 1 }
+        applyApprovalId: { type: string, minLength: 1 }
+        message: { type: string, minLength: 1, maxLength: 200 }
+      required: [proposalId, approvalId, applyApprovalId, message]
+    CommitResult:
+      type: object
+      properties:
+        status: { type: string, enum: [committed] }
+        proposalId: { type: string }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        branch: { type: string }
+        commitSha: { type: string }
+        shortSha: { type: string }
+      required: [status, proposalId, repository, branch, commitSha, shortSha]
+    PushReview:
+      type: object
+      properties:
+        status: { type: string, enum: [ready_to_push] }
+        proposalId: { type: string }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        branch: { type: string }
+        commitSha: { type: string }
+        shortSha: { type: string }
+      required: [status, proposalId, repository, branch, commitSha, shortSha]
+    PushResult:
+      type: object
+      properties:
+        status: { type: string, enum: [pushed] }
+        proposalId: { type: string }
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        branch: { type: string }
+        commitSha: { type: string }
+        shortSha: { type: string }
+      required: [status, proposalId, repository, branch, commitSha, shortSha]
+    RepositoryContextUsed:
+      type: object
+      properties:
+        paths:
+          type: array
+          items: { type: string }
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              startLine: { type: number }
+              endLine: { type: number }
+            required: [path]
+        warnings:
+          type: array
+          items: { type: string }
+        approximateChars: { type: number }
+        chunked: { type: boolean }
+      required: [paths, sources]
+    RepositoryConnectInput:
+      type: object
+      properties:
+        repositoryUrl:
+          type: string
+        branch:
+          type: string
+      required: [repositoryUrl]
+    RepositoryRef:
+      type: object
+      properties:
+        id: { type: string }
+        owner: { type: string }
+        name: { type: string }
+        branch: { type: string }
+        defaultBranch: { type: string }
+        webUrl: { type: string }
+      required: [id, owner, name, branch, defaultBranch, webUrl]
+    RepositoryEntry:
+      type: object
+      properties:
+        path: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [file, directory] }
+        size: { type: number }
+        language: { type: string }
+      required: [path, name, type]
+    RepositoryTreeInput:
+      type: object
+      properties:
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        path: { type: string }
+      required: [repository]
+    RepositoryFileInput:
+      type: object
+      properties:
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        path: { type: string }
+      required: [repository, path]
+    RepositoryFile:
+      type: object
+      properties:
+        path: { type: string }
+        language: { type: string }
+        size: { type: number }
+        content: { type: string }
+        truncated: { type: boolean }
+      required: [path, language, size, content, truncated]
+    RepositorySearchInput:
+      type: object
+      properties:
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        query: { type: string }
+      required: [repository, query]
+    RepositorySearchResult:
+      type: object
+      properties:
+        path: { type: string }
+        line: { type: number }
+        context: { type: string }
+      required: [path, line, context]
+    RepositoryOverview:
+      type: object
+      properties:
+        repository:
+          $ref: "#/components/schemas/RepositoryRef"
+        fileCount: { type: number }
+        sourceCount: { type: number }
+        configCount: { type: number }
+        testCount: { type: number }
+        framework: { type: string }
+        language: { type: string }
+        packageManager: { type: string }
+        directories:
+          type: array
+          items: { type: string }
+        entryPoints:
+          type: array
+          items: { type: string }
+        authenticationFiles:
+          type: array
+          items: { type: string }
+        apiFiles:
+          type: array
+          items: { type: string }
+        databaseFiles:
+          type: array
+          items: { type: string }
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              category: { type: string }
+              language: { type: string }
+              size: { type: number }
+            required: [path, category, language]
+        dependencies:
+          type: array
+          items:
+            type: object
+            properties:
+              from: { type: string }
+              to: { type: string }
+            required: [from, to]
+        architecture:
+          type: array
+          items:
+            type: object
+            properties:
+              layer: { type: string }
+              paths:
+                type: array
+                items: { type: string }
+            required: [layer, paths]
+      required:
+        - repository
+        - fileCount
+        - sourceCount
+        - configCount
+        - testCount
+        - framework
+        - language
+        - packageManager
+        - directories
+        - entryPoints
+        - authenticationFiles
+        - apiFiles
+        - databaseFiles
+        - files
+        - dependencies
+        - architecture
+
