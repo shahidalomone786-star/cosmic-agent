@@ -140,6 +140,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .preview-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid #406d6b; border-radius: 6px; background: #142d2d; color: #a7e1cf; font: 10px var(--font-code); transition: border-color .18s ease, background .18s ease; }
 .preview-toggle:hover, .preview-toggle.active { border-color: #70cdb8; background: #1d4741; color: #d6fff0; }
+.preview-page { min-height: 100dvh; background: radial-gradient(circle at 70% -10%, #1d2b2b 0, transparent 38%), var(--bg); color: var(--text); }
+.preview-page-header { display: flex; align-items: center; gap: 20px; min-height: 68px; padding: 0 28px; border-bottom: 1px solid var(--line); background: rgba(13,22,26,.86); }
+.preview-page-header > div { min-width: 0; flex: 1; }.preview-page-header strong { display: block; margin-top: 5px; font-size: 13px; }.preview-page-id { max-width: 210px; overflow: hidden; color: var(--faint); font: 8px var(--font-code); text-overflow: ellipsis; white-space: nowrap; }
+.preview-back { display: inline-flex; align-items: center; gap: 7px; color: var(--text); font-weight: 800; text-decoration: none; }.preview-back svg { color: var(--accent); }.preview-back:hover { color: var(--accent); }
+.preview-page-content { width: min(1180px, calc(100% - 40px)); margin: 28px auto; }.preview-page-content .preview-panel { margin: 0; }
+.proposal-audit-summary { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: rgba(10,20,24,.62); }.proposal-audit-summary span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid #2c444b; border-radius: 5px; color: var(--muted); font: 9px var(--font-code); }.proposal-audit-summary strong { color: var(--faint); font-weight: 500; }.proposal-audit-summary .audit-validation { color: #e8c178; }.proposal-audit-summary .audit-security { color: var(--green); }
 .preview-panel { margin: 22px 0 34px 42px; overflow: hidden; border: 1px solid #385158; border-radius: 12px; background: #0b1519; box-shadow: 0 18px 45px #0003; animation: rise .25s ease-out; }
 .preview-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 15px; border-bottom: 1px solid var(--line); background: linear-gradient(145deg, #16292d, #101c20); }
 .preview-title, .preview-header-actions, .preview-toolbar, .preview-title > div:last-child { display: flex; align-items: center; }

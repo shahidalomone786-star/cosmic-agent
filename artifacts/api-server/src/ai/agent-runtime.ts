@@ -39,6 +39,10 @@ export type AgentEvent = {
     | "proposal_generated"
     | "approval_requested"
     | "validation_started"
+     | "applying"
+     | "preview_started"
+     | "preview_ready"
+     | "preview_failed"
     | "task_completed"
     | "task_failed"
     | "retry";
@@ -55,6 +59,7 @@ export type AgentPlanStep = {
 
 export type AgentSession = {
   id: string;
+  ownerId?: string;
   creatorName: string;
   task: string;
   status: AgentSessionStatus;
@@ -124,6 +129,7 @@ export type AgentRunInput = {
   model: string;
   repository?: RepositoryRef;
   paths?: string[];
+  ownerId?: string;
 };
 
 export type AgentToolDefinition = {
@@ -464,7 +470,7 @@ export async function executeAgentTool(
     const paths = Array.isArray(input.paths) ? input.paths.filter((path): path is string => typeof path === "string") : [];
     result = await run(createChangeProposal(provider, session.activeModel, session.task, repository, uniquePaths(paths)));
     const proposal = result as ChangeProposal;
-    registerProposal(proposal, session.repository, provider.id);
+    registerProposal(proposal, session.repository, provider.id, undefined, session.ownerId, undefined);
     session.proposal = { proposalId: proposal.proposalId, files: proposal.files.map((file) => file.path), risk: proposal.risk, summary: proposal.summary };
     session.proposalData = proposal;
     proposalSessions.set(proposal.proposalId, session.id);
@@ -503,6 +509,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
   const manager = initializeManager(randomUUID(), task, input.model, provider.getModels());
   const session: AgentSession = {
     id: randomUUID(),
+    ownerId: input.ownerId,
     creatorName: COSMIC_AGENT_CREATOR,
     task: task.slice(0, 2_000),
     status: "running",
@@ -615,7 +622,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       transitionAgentState(session, manager.classification.category === "COMPLEX" ? "REVIEWING" : "PROPOSING");
       reserveProviderBudget(session, Math.min(12_000, Math.max(1_000, session.task.length + session.context.approximateChars)));
        const proposal = await executeAgentTool(provider, session, "create_proposal", { repository: session.repository, paths: session.selectedFiles, request: session.task }) as ChangeProposal;
-      registerProposal(proposal, session.repository, provider.id);
+      registerProposal(proposal, session.repository, provider.id, undefined, session.ownerId, undefined);
       session.proposal = {
         proposalId: proposal.proposalId,
         files: proposal.files.map((file) => file.path),
@@ -785,6 +792,29 @@ export function recordAgentValidation(proposalId: string, result: { status: stri
   return session;
 }
 
+export function recordPreviewLifecycle(
+  proposalId: string,
+  phase: "preview_starting" | "preview_ready" | "preview_failed",
+  detail: string,
+): AgentSession | undefined {
+  const sessionId = proposalSessions.get(proposalId);
+  const session = sessionId ? sessions.get(sessionId) : undefined;
+  if (!session) return undefined;
+  const event = phase === "preview_starting"
+    ? { type: "preview_started" as const, label: "Starting Preview" }
+    : phase === "preview_ready"
+      ? { type: "preview_ready" as const, label: "Preview Ready" }
+      : { type: "preview_failed" as const, label: "Preview failed" };
+  addEvent(session, event.type, event.label, detail);
+  if (phase === "preview_failed") {
+    session.status = "failed";
+    session.currentState = "FAILED";
+    session.recovery = { code: "preview_failure", message: "The approved application could not start. Fix the runtime and restart Preview.", newProposalRequired: false };
+  }
+  session.updatedAt = now();
+  return session;
+}
+
 function selectTools(task: string, hasRepository: boolean): string[] {
   if (!hasRepository) return ["repository_status"];
   const tools = ["repository_status", "analyze_repository", "file_context", "create_proposal"];
@@ -793,6 +823,5 @@ function selectTools(task: string, hasRepository: boolean): string[] {
 }
 
 function inferredCreatePaths(task: string): string[] {
-  if (/\bracing game\b/i.test(task)) return ["artifacts/cosmic-agent/public/cosmic-racing-game.html"];
   return [];
 }

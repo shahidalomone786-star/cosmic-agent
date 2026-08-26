@@ -15,7 +15,7 @@ import {
   Activity, Eye, GitBranch, Pencil, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Terminal, Trash2, Wrench, X, Square,
   Github, KeyRound, LoaderCircle, LogIn, LogOut, Settings as SettingsIcon,
 } from 'lucide-react';
-import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
+import { Link, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
 
 const queryClient = new QueryClient();
 type Role = 'user' | 'assistant';
@@ -152,8 +152,7 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
   const [repositoryOpen, setRepositoryOpen] = useState(false);
   const [resourceOpen, setResourceOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-   const [previewProposalId, setPreviewProposalId] = useState("");
-   const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewProposalId, setPreviewProposalId] = useState(() => localStorage.getItem('cosmic-preview-proposal-id') ?? '');
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -182,6 +181,7 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
 
   useEffect(() => { localStorage.setItem('cosmic-conversations', JSON.stringify(conversations)); }, [conversations]);
   useEffect(() => { if (repository) localStorage.setItem('cosmic-repository', JSON.stringify(repository)); else localStorage.removeItem('cosmic-repository'); }, [repository]);
+  useEffect(() => { if (previewProposalId) localStorage.setItem('cosmic-preview-proposal-id', previewProposalId); else localStorage.removeItem('cosmic-preview-proposal-id'); }, [previewProposalId]);
   useEffect(() => {
     if (!active) return;
     setSelectedModelId(active.modelId);
@@ -258,7 +258,7 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
       setIsProposing(true);
       try {
         const result = await apiJson<{ proposal: ChangeProposal; session: RuntimeSession }>(
-          '/api/workspace/default/racing-game/proposal',
+          '/api/workspace/default/proposal',
           { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ request: text }) },
         );
         setProposal(result.proposal);
@@ -327,9 +327,9 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
     </aside>
     {sidebarOpen && <button className="drawer-overlay" onClick={() => setSidebarOpen(false)} aria-label="Close sidebar" />}
      <main className="chat-main">
-         <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · read-only mode</span></div></div><div className="header-actions">{repository && <button className="context-indicator" onClick={() => setRepositoryOpen(true)}><span className="status-dot" /> {repository.owner}/{repository.name}{contextPaths.length ? ` · ${contextPaths.length} files` : ''}</button>}{previewProposalId && <button className={`preview-toggle ${previewOpen ? "active" : ""}`} onClick={() => setPreviewOpen((open) => !open)}><Eye size={14} /> Preview</button>}<button className="resource-toggle" onClick={() => setResourceOpen((open) => !open)} aria-label="Toggle resource status"><Activity size={15} /> Resources</button><button className="repo-toggle" onClick={() => setRepositoryOpen((open) => !open)} aria-label="Toggle repository explorer"><GitBranch size={15} /> Repository</button><div className="header-status"><span className="status-dot" /> Ready</div></div></header>
+         <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · read-only mode</span></div></div><div className="header-actions">{repository && <button className="context-indicator" onClick={() => setRepositoryOpen(true)}><span className="status-dot" /> {repository.owner}/{repository.name}{contextPaths.length ? ` · ${contextPaths.length} files` : ''}</button>}{previewProposalId && <Link className="preview-toggle" href={`/preview/${encodeURIComponent(previewProposalId)}`}><Eye size={14} /> Preview</Link>}<button className="resource-toggle" onClick={() => setResourceOpen((open) => !open)} aria-label="Toggle resource status"><Activity size={15} /> Resources</button><button className="repo-toggle" onClick={() => setRepositoryOpen((open) => !open)} aria-label="Toggle repository explorer"><GitBranch size={15} /> Repository</button><div className="header-status"><span className="status-dot" /> Ready</div></div></header>
        <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
-           <div className="message-column">{!active?.messages.length && !proposal && !isProposing && !agentSession ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{isProposing && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>Reading selected files and preparing a safe diff preview…</span></div>}{agentSession && <AgentTimeline session={agentSession} model={selectedModel} />}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => { setProposal(null); setAgentSession(null); }} onRegenerate={() => { setProposal(null); setAgentSession(null); setDraft(proposalRequest); }} onApplied={(result) => { recordAppliedEvent(result); setPreviewProposalId(result.proposalId); setPreviewOpen(true); }} onCommitted={(result) => recordCommittedEvent(result)} onPushed={(result) => recordPushedEvent(result)} />}{previewOpen && previewProposalId && <PreviewPanel proposalId={previewProposalId} onClose={() => setPreviewOpen(false)} />}</>}</div>
+           <div className="message-column">{!active?.messages.length && !proposal && !isProposing && !agentSession ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{isProposing && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>Reading selected files and preparing a safe diff preview…</span></div>}{agentSession && <AgentTimeline session={agentSession} model={selectedModel} />}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => { setProposal(null); setAgentSession(null); }} onRegenerate={() => { setProposal(null); setAgentSession(null); setDraft(proposalRequest); }} onApplied={(result) => { recordAppliedEvent(result); setPreviewProposalId(result.proposalId); }} onCommitted={(result) => recordCommittedEvent(result)} onPushed={(result) => recordPushedEvent(result)} />}</>}</div>
       </div>
        <div className="composer-wrap">{contextPaths.length > 0 && <div className="context-chips" aria-label="Selected repository context">{contextPaths.map((path) => <button key={path} onClick={() => setContextPaths((current) => current.filter((item) => item !== path))}>@{path} <X size={11} /></button>)}</div>}<form className="composer" onSubmit={handleSend}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder={repository ? "Ask about this repository…" : "Ask Cosmic Agent anything…"} rows={1} aria-label="Message Cosmic Agent" /><div className="composer-bottom"><div className="composer-meta"><div className="model-picker"><button type="button" className="model-trigger" onClick={() => setModelOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={modelOpen}><Sparkles size={14} /><span>{selectedModel.displayName}</span><ChevronDown size={14} /></button>{modelOpen && <div className="model-menu" role="listbox">{models.map((model) => <button type="button" role="option" aria-selected={model.id === selectedModel.id} className={model.id === selectedModel.id ? 'selected' : ''} key={model.id} onClick={() => changeModel(model.id)}><span><strong>{model.displayName}</strong><small>{model.provider} · {model.capabilities.join(' · ')}</small></span>{model.id === selectedModel.id && <Check size={15} />}</button>)}</div>}</div><span className="composer-hint">Enter to send · Shift + Enter for newline</span></div>{isStreaming || isProposing ? <button type="button" className="stop-button" onClick={() => { abortRef.current?.abort(); setIsProposing(false); }}><Square size={13} fill="currentColor" /> Stop</button> : <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="Send message"><Send size={16} /></button>}</div></form><p className="composer-disclaimer">Proposal preview mode · approval never writes to the repository.</p></div>
     </main>
@@ -495,7 +495,12 @@ function MessageBubble({ message, onRetry, onEdit }: { message: ChatMessage; onR
 }
 function friendlyError(message: string) { const lower = message.toLowerCase(); if (lower.includes('rate') || lower.includes('limit')) return 'The provider is temporarily busy. Please wait a moment and try again.'; if (lower.includes('unavailable') || lower.includes('configured')) return 'This model is unavailable right now. Try another model from the selector.'; return 'We could not reach the provider. Check your connection and try again.'; }
 function isCodingRequest(text: string) { return /^(fix|add|change|update|remove|refactor|implement|make|improve|replace|rename|create)\b/i.test(text.trim()) || /\b(bug|feature|component|screen|login|patch|edit)\b/i.test(text); }
-function Router({ user, onLogout }: { user: SessionUser; onLogout: () => void }) { return <ErrorBoundary><Switch><Route path="/" component={() => <Home user={user} onLogout={onLogout} />} /><Route component={NotFound} /></Switch></ErrorBoundary>; }
+function PreviewPage() {
+  const { proposalId = '' } = useParams<{ proposalId: string }>();
+  const [, setLocation] = useLocation();
+  return <main className="preview-page"><header className="preview-page-header"><Link className="preview-back" href="/"><Aperture size={16} /> Cosmic Agent</Link><div><span className="repo-kicker"><Eye size={12} /> Dedicated application preview</span><strong>Approved project runtime</strong></div><span className="preview-page-id">{proposalId}</span></header><div className="preview-page-content"><PreviewPanel proposalId={proposalId} onClose={() => setLocation('/')} /></div></main>;
+}
+function Router({ user, onLogout }: { user: SessionUser; onLogout: () => void }) { return <ErrorBoundary><Switch><Route path="/" component={() => <Home user={user} onLogout={onLogout} />} /><Route path="/preview/:proposalId" component={PreviewPage} /><Route component={NotFound} /></Switch></ErrorBoundary>; }
 function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checking, setChecking] = useState(true);

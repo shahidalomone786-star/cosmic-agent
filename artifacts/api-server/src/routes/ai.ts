@@ -22,8 +22,17 @@ import { reviewProposal, reviewRequestSchema } from "../ai/reviewer-runtime";
 import { validateAppliedProposal } from "../ai/validator-runtime";
 import { approveProposal, ApprovalGateError, approvalRequestSchema } from "../ai/approval-gate";
 import { requireAuthenticatedUser } from "../middlewares/auth-middleware";
+import { recordLocalLifecycle, recordLocalValidation } from "../workspace/local-session";
 
 const router: IRouter = Router();
+function ownedProposal(proposalId: string, userId: string | undefined, res: Response) {
+  const registered = getRegisteredProposal(proposalId);
+  if (!registered || (registered.ownerId && registered.ownerId !== userId)) {
+    res.status(404).json({ error: "Proposal not found.", code: "not_found" });
+    return undefined;
+  }
+  return registered;
+}
 router.use((req, res, next) => {
   if (!req.path.startsWith("/ai/")) {
     next();
@@ -41,6 +50,8 @@ router.get("/ai/agent/tools", (_req, res) => {
 });
 
 router.post("/ai/agent/sessions/:sessionId/tools", async (req, res) => {
+  const session = getAgentSession(req.params.sessionId);
+  if (!session || session.ownerId !== req.authUser?.id) { res.status(404).json({ error: "Agent session not found.", code: "not_found" }); return; }
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
   const input = req.body?.input && typeof req.body.input === "object" ? req.body.input as Record<string, unknown> : {};
   if (!name) { res.status(400).json({ error: "A registered tool name is required.", code: "invalid_input" }); return; }
@@ -52,6 +63,8 @@ router.post("/ai/agent/sessions/:sessionId/tools", async (req, res) => {
 });
 
 router.get("/ai/agent/sessions/:sessionId/workers/:role/context", (req, res) => {
+  const session = getAgentSession(req.params.sessionId);
+  if (!session || session.ownerId !== req.authUser?.id) { res.status(404).json({ error: "Agent session not found.", code: "not_found" }); return; }
   const role = req.params.role === "frontend" || req.params.role === "backend" || req.params.role === "validator" ? req.params.role : undefined;
   if (!role) {
     res.status(400).json({ error: "Worker role must be frontend, backend, or validator.", code: "invalid_input" });
@@ -69,6 +82,8 @@ router.get("/ai/agent/sessions/:sessionId/workers/:role/context", (req, res) => 
 });
 
 router.post("/ai/agent/sessions/:sessionId/workers/:role/tools", async (req, res) => {
+  const session = getAgentSession(req.params.sessionId);
+  if (!session || session.ownerId !== req.authUser?.id) { res.status(404).json({ error: "Agent session not found.", code: "not_found" }); return; }
   const role = req.params.role;
   if (role !== "frontend" && role !== "backend" && role !== "reviewer" && role !== "validator") {
     res.status(400).json({ error: "Role must be frontend, backend, reviewer, or validator.", code: "invalid_input" });
@@ -122,7 +137,7 @@ router.post("/ai/agent/sessions", async (req, res) => {
     return;
   }
   try {
-    const session = await runAgentSession(providerManager.getProviderForModel(model), { task, model, repository: body.repository, paths });
+    const session = await runAgentSession(providerManager.getProviderForModel(model), { task, model, repository: body.repository, paths, ownerId: req.authUser?.id });
     res.status(201).json(session);
   } catch (error) {
     if (error instanceof AgentToolError) {
@@ -135,7 +150,7 @@ router.post("/ai/agent/sessions", async (req, res) => {
 
 router.get("/ai/agent/sessions/:sessionId", (req, res) => {
   const session = getAgentSession(req.params.sessionId);
-  if (!session) {
+  if (!session || session.ownerId !== req.authUser?.id) {
     res.status(404).json({ error: "Agent session not found.", code: "not_found" });
     return;
   }
@@ -184,7 +199,7 @@ router.post("/ai/change-proposal", async (req, res) => {
       parsed.data.repositoryContext.repository as RepositoryRef,
       parsed.data.repositoryContext.paths,
     );
-    registerProposal(proposal, parsed.data.repositoryContext.repository as RepositoryRef, provider.id);
+    registerProposal(proposal, parsed.data.repositoryContext.repository as RepositoryRef, provider.id, undefined, req.authUser?.id, undefined);
     res.json(CreateChangeProposalResponse.parse(proposal));
   } catch (error) {
     sendProposalError(res, error);
@@ -195,10 +210,13 @@ router.post("/ai/change-proposal/execute", async (req, res) => {
   const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
   const approvalId = typeof req.body?.approvalId === "string" ? req.body.approvalId.trim() : "";
   if (!proposalId) { res.status(400).json({ error: "Approval requires a valid proposal.", code: "invalid_proposal" }); return; }
+  const owned = ownedProposal(proposalId, req.authUser?.id, res);
+  if (!owned) return;
   try {
     const result = await executeProposal(proposalId, approvalId);
-    const registered = getRegisteredProposal(proposalId);
+    const registered = owned;
     if (registered?.workspaceRoot) {
+      recordLocalLifecycle(proposalId, "validating", "The approved local project is being checked before Preview.");
       const localFiles = await Promise.all(registered.proposal.files.map(async (file) => {
         const content = await (await import("node:fs/promises")).readFile(`${registered.workspaceRoot}/${file.path}`, "utf8");
         return { path: file.path, content };
@@ -206,10 +224,12 @@ router.post("/ai/change-proposal/execute", async (req, res) => {
       const valid = localFiles.every((file) => file.content.length > 0);
       if (!valid) {
         await rejectAppliedProposal(proposalId);
+        recordLocalValidation(proposalId, false, "A generated project file was empty or unavailable.");
         res.status(422).json({ ...result, status: "validation_failed", message: "Local workspace validation failed; changes were rolled back.", canUndo: false });
         return;
       }
       markProposalValidated(proposalId, true);
+      recordLocalValidation(proposalId, true, "Approved local project files are present.");
       res.json({ ...result, typecheck: "pass", build: "pass", message: "Local files created and passed deterministic HTML workspace validation. Nothing has been committed or pushed.", validation: { taskId: "", status: "pass", checks: [{ name: "typecheck", status: "pass", details: "Local text files are present." }, { name: "build", status: "pass", details: "Local HTML entry point and linked assets are present." }], toolCallIds: [], summary: "Local workspace validation passed." } });
       return;
     }
@@ -261,13 +281,14 @@ router.post("/ai/change-proposal/approve", (req, res) => {
   const userId = req.authUser?.id;
   if (!userId) return;
   const session = getAgentSessionForProposal(proposalId);
-  const registered = getRegisteredProposal(proposalId);
+  const registered = ownedProposal(proposalId, userId, res);
   if (!registered) {
-    res.status(404).json({ error: "Proposal not found.", code: "not_found" });
     return;
   }
   try {
-     res.json(approveProposal(registered.proposal, registered.repository, userId, session?.id, parsed.data.action));
+     const approval = approveProposal(registered.proposal, registered.repository, userId, session?.id, parsed.data.action);
+     if (parsed.data.action === "apply") recordLocalLifecycle(proposalId, "applying", "Approval recorded. No other write path is authorized.");
+     res.json(approval);
   } catch (error) {
     if (error instanceof ApprovalGateError) {
       res.status(400).json({ error: error.message, code: error.code });
@@ -280,6 +301,7 @@ router.post("/ai/change-proposal/approve", (req, res) => {
 router.post("/ai/change-proposal/undo", async (req, res) => {
   const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
   if (!proposalId) { res.status(400).json({ error: "Undo requires a valid proposal.", code: "invalid_proposal" }); return; }
+  if (!ownedProposal(proposalId, req.authUser?.id, res)) return;
   try {
     await undoProposal(proposalId);
     res.json({ status: "undone", proposalId, message: "The exact pre-apply contents were restored locally." });
@@ -291,6 +313,7 @@ router.post("/ai/change-proposal/undo", async (req, res) => {
 router.post("/ai/change-proposal/commit-review", async (req, res) => {
   const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
   if (!proposalId) { res.status(400).json({ error: "Commit review requires a valid proposal.", code: "invalid_proposal" }); return; }
+  if (!ownedProposal(proposalId, req.authUser?.id, res)) return;
   try { res.json(await getCommitReview(proposalId)); } catch (error) { sendExecutionError(res, error); }
 });
 
@@ -299,6 +322,7 @@ router.post("/ai/change-proposal/commit", async (req, res) => {
   const approvalId = typeof req.body?.approvalId === "string" ? req.body.approvalId.trim() : "";
   const message = typeof req.body?.message === "string" ? req.body.message : "";
   if (!proposalId) { res.status(400).json({ error: "Commit approval requires a valid proposal.", code: "invalid_proposal" }); return; }
+  if (!ownedProposal(proposalId, req.authUser?.id, res)) return;
   try {
     const applyApprovalId = typeof req.body?.applyApprovalId === "string" ? req.body.applyApprovalId : "";
     await stageProposal(proposalId, applyApprovalId);
@@ -315,6 +339,7 @@ router.post("/ai/change-proposal/commit", async (req, res) => {
 router.post("/ai/change-proposal/push-review", async (req, res) => {
   const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
   if (!proposalId) { res.status(400).json({ error: "Push review requires a valid proposal.", code: "invalid_proposal" }); return; }
+  if (!ownedProposal(proposalId, req.authUser?.id, res)) return;
   try { res.json(getPushReview(proposalId)); } catch (error) { sendExecutionError(res, error); }
 });
 
@@ -322,6 +347,7 @@ router.post("/ai/change-proposal/push", async (req, res) => {
   const proposalId = typeof req.body?.proposalId === "string" ? req.body.proposalId.trim() : "";
   const approvalId = typeof req.body?.approvalId === "string" ? req.body.approvalId.trim() : "";
   if (!proposalId) { res.status(400).json({ error: "Push approval requires a valid proposal.", code: "invalid_proposal" }); return; }
+  if (!ownedProposal(proposalId, req.authUser?.id, res)) return;
   try {
     const result = await pushProposal(proposalId, approvalId);
     recordServerToolTrace(getAgentSessionForProposal(proposalId)?.id, "git_push", "completed", { proposalId }, "Authenticated non-force push completed.");

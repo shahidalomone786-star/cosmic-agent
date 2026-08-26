@@ -79,6 +79,8 @@ type Session = {
   approval?: ProposalApproval;
   staged: boolean;
   workspaceRoot?: string;
+  ownerId?: string;
+  projectId?: string;
 };
 
 const MAX_FILES = Number(process.env.COSMIC_MAX_PROPOSAL_FILES ?? 20);
@@ -105,7 +107,7 @@ const sessionsCommands = [
   { name: "api build", args: ["--filter", "@workspace/api-server", "run", "build"] },
 ];
 
-export function registerProposal(proposal: ChangeProposal, repository?: RepositoryRef, provider?: "groq" | "gemini", workspaceRoot?: string): void {
+export function registerProposal(proposal: ChangeProposal, repository?: RepositoryRef, provider?: "groq" | "gemini", workspaceRoot?: string, ownerId?: string, projectId?: string): void {
   if (proposal.files.length > MAX_FILES || proposal.addedLines > MAX_ADDED || proposal.removedLines > MAX_REMOVED || proposal.files.reduce((sum, file) => sum + Buffer.byteLength(file.originalCode) + Buffer.byteLength(file.proposedCode), 0) > MAX_TEXT_BYTES) {
     throw new PatchExecutionError("too_large", `Proposal exceeds safe limits: ${MAX_FILES} files, ${MAX_ADDED} added lines, ${MAX_REMOVED} removed lines, or ${MAX_TEXT_BYTES} bytes.`);
   }
@@ -115,17 +117,22 @@ export function registerProposal(proposal: ChangeProposal, repository?: Reposito
     if (binaryExtension.test(relative) || file.originalCode.includes("\0") || file.proposedCode.includes("\0")) throw new PatchExecutionError("binary_file", `Binary file edits are not supported: ${file.path}`);
     if (Buffer.byteLength(file.proposedCode) > MAX_TEXT_BYTES) throw new PatchExecutionError("too_large", `File exceeds the safe size limit: ${file.path}`);
   }
-  sessions.set(proposal.proposalId, { proposal, repository, provider, workspaceRoot, snapshots: [], applied: false, undoAvailable: false, validated: false, staged: false });
+  sessions.set(proposal.proposalId, { proposal, repository, provider, workspaceRoot, ownerId, projectId, snapshots: [], applied: false, undoAvailable: false, validated: false, staged: false });
 }
 
-export function getRegisteredProposal(proposalId: string): { proposal: ChangeProposal; repository?: RepositoryRef; provider?: "groq" | "gemini"; workspaceRoot?: string } | undefined {
+export function getRegisteredProposal(proposalId: string): { proposal: ChangeProposal; repository?: RepositoryRef; provider?: "groq" | "gemini"; workspaceRoot?: string; ownerId?: string; projectId?: string } | undefined {
   const session = sessions.get(proposalId);
-  return session ? { proposal: session.proposal, repository: session.repository, provider: session.provider, workspaceRoot: session.workspaceRoot } : undefined;
+  return session ? { proposal: session.proposal, repository: session.repository, provider: session.provider, workspaceRoot: session.workspaceRoot, ownerId: session.ownerId, projectId: session.projectId } : undefined;
 }
 
 export function isProposalPreviewable(proposalId: string): boolean {
   const session = sessions.get(proposalId);
   return Boolean(session?.applied && session.validated);
+}
+
+export function findWorkspaceProposal(ownerId: string, projectId: string): string | undefined {
+  const matches = [...sessions.entries()].filter(([, session]) => session.ownerId === ownerId && session.projectId === projectId && session.workspaceRoot);
+  return matches.at(-1)?.[0];
 }
 
 export async function executeProposal(proposalId: string, approvalId?: string): Promise<ExecutionResult> {

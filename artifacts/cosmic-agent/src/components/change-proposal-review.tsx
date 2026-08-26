@@ -61,6 +61,8 @@ export function ChangeProposalReview({
   const [openFiles, setOpenFiles] = useState<string[]>(proposal.files[0] ? [proposal.files[0].path] : []);
   const toggleFile = (path: string) => setOpenFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path]);
   const riskClass = proposal.risk.toLowerCase();
+  const createdFiles = proposal.files.filter((file) => file.operation === "create");
+  const modifiedFiles = proposal.files.filter((file) => file.operation === "edit");
   const approve = async () => {
     setBusy(true); setError("");
     try {
@@ -151,6 +153,13 @@ export function ChangeProposalReview({
       <span className="added-stat">+{proposal.addedLines} added</span>
       <span className="removed-stat">−{proposal.removedLines} removed</span>
     </div>
+    <div className="proposal-audit-summary" aria-label="Proposal audit summary">
+      <span><strong>Created</strong>{createdFiles.length}</span>
+      <span><strong>Modified</strong>{modifiedFiles.length}</span>
+      <span><strong>Deleted</strong>0</span>
+      <span className="audit-validation"><strong>Validation</strong>{execution ? execution.status === "applied" ? "Passed" : "Failed" : "Pending approval"}</span>
+      <span className="audit-security"><strong>Security</strong>Server checks passed</span>
+    </div>
     <div className="proposal-files">
       {proposal.files.map((file) => {
         const isOpen = openFiles.includes(file.path);
@@ -192,8 +201,8 @@ export function ChangeProposalReview({
     {!execution && !busy && <div className="proposal-safety"><ShieldCheck size={15} /><span>Nothing has been written. Approval sends only this server-held proposal ID for validation and execution.</span></div>}
     <div className="proposal-actions">
       {execution?.status === "applied" && execution.canUndo && <button className="proposal-undo" onClick={undo} disabled={busy}><RotateCw size={14} /> Undo changes</button>}
-      <button className="proposal-cancel" onClick={onCancel} disabled={busy}><X size={14} /> {execution?.status === "applied" ? "Continue chat" : "Cancel"}</button>
-      {!execution && <><button className="proposal-regenerate" onClick={onRegenerate} disabled={busy}><RotateCw size={14} /> Regenerate</button><button className="proposal-approve" onClick={() => void approve()} disabled={busy}><Check size={14} /> {busy ? "Applying…" : "Approve changes"}</button></>}
+      <button className="proposal-cancel" onClick={onCancel} disabled={busy}><X size={14} /> {execution?.status === "applied" ? "Continue chat" : "Reject"}</button>
+      {!execution && <><button className="proposal-regenerate" onClick={onRegenerate} disabled={busy}><RotateCw size={14} /> Regenerate</button><button className="proposal-approve" onClick={() => void approve()} disabled={busy}><Check size={14} /> {busy ? "Applying…" : "Approve & Apply"}</button></>}
     </div>
   </section>;
 }
