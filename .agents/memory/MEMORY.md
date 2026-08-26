@@ -9,3 +9,4 @@
 - [Route middleware namespaces](route-middleware-namespaces.md) — Scope router-level guards before rejecting requests or earlier routers can intercept unrelated endpoints.
 - [Git approval boundary](git-approval-boundary.md) — Keep apply, commit, and push approvals distinct and server-bound.
 - [Express route patterns](express-route-patterns.md) — Express 5 requires mounted middleware for catch-all subpaths; unnamed wildcard route patterns crash startup.
+- [Isolated preview installs](isolated-preview-installs.md) — Generated app previews must install outside the monorepo workspace with pnpm in non-interactive CI mode.

@@ -87,11 +87,11 @@ async function waitForPort(port: number, timeoutMs = 18_000): Promise<boolean> {
   return false;
 }
 async function installProjectDependencies(root: string): Promise<{ ok: boolean; output: string }> {
-  const child = spawn("pnpm", ["install", "--ignore-scripts", "--no-frozen-lockfile", "--prefer-offline"], {
+  const child = spawn("pnpm", ["install", "--ignore-workspace", "--ignore-scripts", "--no-frozen-lockfile", "--prefer-offline"], {
     cwd: root,
     shell: false,
     stdio: "pipe",
-    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", NODE_ENV: "development", CI: "1" },
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", NODE_ENV: "development", CI: "true" },
   });
   let output = "";
   const appendOutput = (chunk: Buffer) => {
