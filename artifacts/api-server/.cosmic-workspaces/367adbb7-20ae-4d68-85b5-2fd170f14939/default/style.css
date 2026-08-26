@@ -1,0 +1,12 @@
+/* Basic styling for the website */
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 2rem;
+    background-color: #f5f5f5;
+    color: #333;
+}
+
+h1 {
+    color: #0066cc;
+}
