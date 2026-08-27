@@ -1,4 +1,4 @@
-export type GroqKeyHealth = "healthy" | "cooldown" | "unavailable";
+export type GroqKeyHealth = "available" | "rate_limited" | "temporarily_failed" | "unavailable";
 
 export type GroqKeyStatus = {
   id: string;
@@ -36,7 +36,7 @@ export class GroqKeyManager {
       .map(({ secret, index }) => ({
         id: `${providerPrefix}-key-${index + 1}`,
         secret,
-        status: "healthy",
+        status: "available",
         rateLimitCount: 0,
         failures: 0,
       }));
@@ -59,7 +59,7 @@ export class GroqKeyManager {
       if (key.status === "unavailable") continue;
       if (key.cooldownUntil && key.cooldownUntil > now) continue;
       key.cooldownUntil = undefined;
-      key.status = "healthy";
+      key.status = "available";
       key.lastUsedAt = now;
       this.nextIndex = (index + 1) % this.keys.length;
       return { id: key.id, secret: key.secret };
@@ -72,7 +72,7 @@ export class GroqKeyManager {
     if (!key) return;
     key.failures = 0;
     key.cooldownUntil = undefined;
-    key.status = "healthy";
+    key.status = "available";
   }
 
   markRateLimited(id: string): void {
@@ -80,7 +80,7 @@ export class GroqKeyManager {
     if (!key) return;
     key.rateLimitCount += 1;
     key.cooldownUntil = Date.now() + this.cooldownMs;
-    key.status = "cooldown";
+    key.status = "rate_limited";
   }
 
   markFailure(id: string, permanent = false): void {
@@ -93,20 +93,21 @@ export class GroqKeyManager {
       return;
     }
     key.cooldownUntil = Date.now() + DEFAULT_FAILURE_COOLDOWN_MS;
-    key.status = "cooldown";
+    key.status = "temporarily_failed";
   }
 
   getStatus(): { configured: number; available: number; keys: GroqKeyStatus[] } {
     const now = Date.now();
     for (const key of this.keys) {
-      if (key.status === "cooldown" && (!key.cooldownUntil || key.cooldownUntil <= now)) {
-        key.status = "healthy";
+      if ((key.status === "rate_limited" || key.status === "temporarily_failed") &&
+          (!key.cooldownUntil || key.cooldownUntil <= now)) {
+        key.status = "available";
         key.cooldownUntil = undefined;
       }
     }
     return {
       configured: this.keys.length,
-      available: this.keys.filter((key) => key.status === "healthy" && (!key.cooldownUntil || key.cooldownUntil <= now)).length,
+      available: this.keys.filter((key) => key.status === "available" && (!key.cooldownUntil || key.cooldownUntil <= now)).length,
       keys: this.keys.map(({ id, status, cooldownUntil, lastUsedAt, rateLimitCount }) => ({ id, status, cooldownUntil, lastUsedAt, rateLimitCount })),
     };
   }

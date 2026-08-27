@@ -239,6 +239,8 @@ function offload(sessionId: string, content: string): string | undefined {
 function unavailableContext(): RepositoryContextResult {
   return {
     text: "Repository evidence is unavailable. Do not infer repository facts; ask the user to retry later.",
+    summaryText: "Repository evidence is unavailable. Do not infer repository facts.",
+    sourceText: "",
     sources: [],
     warnings: ["Repository evidence is unavailable; no source context was sent."],
     approximateChars: 0,
@@ -468,7 +470,7 @@ export async function executeAgentTool(
   }
   if (name === "create_proposal") {
     const paths = Array.isArray(input.paths) ? input.paths.filter((path): path is string => typeof path === "string") : [];
-    result = await run(createChangeProposal(provider, session.activeModel, session.task, repository, uniquePaths(paths)));
+    result = await run(createChangeProposal(provider, session.activeModel, session.task, repository, uniquePaths(paths), role));
     const proposal = result as ChangeProposal;
     registerProposal(proposal, session.repository, provider.id, undefined, session.ownerId, undefined);
     session.proposal = { proposalId: proposal.proposalId, files: proposal.files.map((file) => file.path), risk: proposal.risk, summary: proposal.summary };

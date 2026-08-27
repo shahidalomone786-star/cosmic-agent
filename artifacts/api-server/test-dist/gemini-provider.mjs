@@ -8,7 +8,7 @@ var GroqKeyManager = class _GroqKeyManager {
     this.keys = secrets.map((secret, index) => ({ secret: secret.trim(), index })).filter(({ secret }) => Boolean(secret)).map(({ secret, index }) => ({
       id: `${providerPrefix}-key-${index + 1}`,
       secret,
-      status: "healthy",
+      status: "available",
       rateLimitCount: 0,
       failures: 0
     }));
@@ -28,7 +28,7 @@ var GroqKeyManager = class _GroqKeyManager {
       if (key.status === "unavailable") continue;
       if (key.cooldownUntil && key.cooldownUntil > now) continue;
       key.cooldownUntil = void 0;
-      key.status = "healthy";
+      key.status = "available";
       key.lastUsedAt = now;
       this.nextIndex = (index + 1) % this.keys.length;
       return { id: key.id, secret: key.secret };
@@ -40,14 +40,14 @@ var GroqKeyManager = class _GroqKeyManager {
     if (!key) return;
     key.failures = 0;
     key.cooldownUntil = void 0;
-    key.status = "healthy";
+    key.status = "available";
   }
   markRateLimited(id) {
     const key = this.find(id);
     if (!key) return;
     key.rateLimitCount += 1;
     key.cooldownUntil = Date.now() + this.cooldownMs;
-    key.status = "cooldown";
+    key.status = "rate_limited";
   }
   markFailure(id, permanent = false) {
     const key = this.find(id);
@@ -59,19 +59,19 @@ var GroqKeyManager = class _GroqKeyManager {
       return;
     }
     key.cooldownUntil = Date.now() + DEFAULT_FAILURE_COOLDOWN_MS;
-    key.status = "cooldown";
+    key.status = "temporarily_failed";
   }
   getStatus() {
     const now = Date.now();
     for (const key of this.keys) {
-      if (key.status === "cooldown" && (!key.cooldownUntil || key.cooldownUntil <= now)) {
-        key.status = "healthy";
+      if ((key.status === "rate_limited" || key.status === "temporarily_failed") && (!key.cooldownUntil || key.cooldownUntil <= now)) {
+        key.status = "available";
         key.cooldownUntil = void 0;
       }
     }
     return {
       configured: this.keys.length,
-      available: this.keys.filter((key) => key.status === "healthy" && (!key.cooldownUntil || key.cooldownUntil <= now)).length,
+      available: this.keys.filter((key) => key.status === "available" && (!key.cooldownUntil || key.cooldownUntil <= now)).length,
       keys: this.keys.map(({ id, status, cooldownUntil, lastUsedAt, rateLimitCount }) => ({ id, status, cooldownUntil, lastUsedAt, rateLimitCount }))
     };
   }
@@ -97,7 +97,7 @@ var GeminiKeyManager = class _GeminiKeyManager extends GroqKeyManager {
     super(secrets, cooldownMs, "gemini");
   }
   static readConfiguredSecrets() {
-    return Array.from({ length: 5 }, (_, index) => process.env[`GEMINI_API_KEY_${index + 1}`]?.trim() ?? "").filter(Boolean);
+    return Array.from({ length: 12 }, (_, index) => process.env[`GEMINI_API_KEY_${index + 1}`]?.trim() ?? "").filter(Boolean);
   }
 };
 var geminiKeyManager = new GeminiKeyManager();
@@ -174,10 +174,50 @@ var logger = pino({
   }
 });
 
+// src/ai/provider-metrics.ts
+var totals = /* @__PURE__ */ new Map();
+var keySlots = /* @__PURE__ */ new Map();
+function emptyTotals() {
+  return { requests: 0, successes: 0, failures: 0, retries: 0, rateLimitEvents: 0, inputChars: 0, outputChars: 0, durationMs: 0 };
+}
+function add(target, input) {
+  target.requests += 1;
+  target.successes += Number(input.success);
+  target.failures += Number(!input.success);
+  target.retries += input.retryCount;
+  target.rateLimitEvents += Number(Boolean(input.rateLimited));
+  target.inputChars += input.approximateInputChars;
+  target.outputChars += input.approximateOutputChars;
+  target.durationMs += Math.max(0, Math.round(input.durationMs));
+}
+function recordProviderMetric(input) {
+  const providerKey = `${input.provider}:${input.role ?? "unknown"}`;
+  const providerTotals = totals.get(providerKey) ?? emptyTotals();
+  add(providerTotals, input);
+  totals.set(providerKey, providerTotals);
+  const slotKey = `${input.provider}:${input.keySlot}`;
+  const slotTotals = keySlots.get(slotKey) ?? emptyTotals();
+  add(slotTotals, input);
+  keySlots.set(slotKey, slotTotals);
+  logger.info({
+    provider: input.provider,
+    role: input.role ?? "unknown",
+    keySlot: input.keySlot,
+    success: input.success,
+    retryCount: input.retryCount,
+    rateLimited: Boolean(input.rateLimited),
+    approximateInputChars: input.approximateInputChars,
+    approximateOutputChars: input.approximateOutputChars,
+    durationMs: Math.max(0, Math.round(input.durationMs))
+  }, "AI provider request telemetry");
+}
+
 // src/ai/gemini-provider.ts
 var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 var REQUEST_TIMEOUT_MS = 45e3;
-var MAX_ATTEMPTS = 2;
+var MAX_ATTEMPTS = 12;
+var RETRY_BASE_DELAY_MS = 25;
+var RETRY_MAX_DELAY_MS = 500;
 var GeminiProvider = class {
   constructor(models, keyManager = geminiKeyManager) {
     this.models = models;
@@ -210,9 +250,13 @@ var GeminiProvider = class {
     }
     let lastError;
     let emitted = false;
+    let attemptsMade = 0;
+    let rateLimited = false;
+    const startedAt = Date.now();
     for (let attempt = 0; attempt < Math.min(configured, MAX_ATTEMPTS); attempt += 1) {
       const lease = this.keyManager.acquire();
       if (!lease) break;
+      attemptsMade += 1;
       try {
         const result = await this.request(lease.secret, request, stream, (token) => {
           emitted = true;
@@ -222,16 +266,46 @@ var GeminiProvider = class {
           throw new GroqProviderError("incomplete_response", "Gemini returned an incomplete response.", true);
         }
         this.keyManager.markSuccess(lease.id);
+        recordProviderMetric({
+          provider: "gemini",
+          role: request.role,
+          keySlot: lease.id,
+          success: true,
+          retryCount: attempt,
+          rateLimited,
+          approximateInputChars: approximateRequestChars(request),
+          approximateOutputChars: extractText(result).length,
+          durationMs: Date.now() - startedAt
+        });
         return result;
       } catch (error) {
         lastError = error instanceof GroqProviderError ? error : new GroqProviderError("temporary_failure", "Gemini request failed.", true);
-        if (lastError.code === "rate_limited") this.keyManager.markRateLimited(lease.id);
-        else if (lastError.code === "invalid_configuration") this.keyManager.markFailure(lease.id, true);
+        if (lastError.code === "rate_limited") {
+          rateLimited = true;
+          this.keyManager.markRateLimited(lease.id);
+        } else if (lastError.code === "invalid_configuration") this.keyManager.markFailure(lease.id, true);
         else if (lastError.retryable) this.keyManager.markFailure(lease.id);
+        recordProviderMetric({
+          provider: "gemini",
+          role: request.role,
+          keySlot: lease.id,
+          success: false,
+          retryCount: attempt,
+          rateLimited: lastError.code === "rate_limited",
+          approximateInputChars: approximateRequestChars(request),
+          approximateOutputChars: 0,
+          durationMs: Date.now() - startedAt
+        });
         if (!lastError.retryable || stream && emitted) throw lastError;
+        if (attempt + 1 < Math.min(configured, MAX_ATTEMPTS)) {
+          await waitForRetry(attempt);
+        }
       }
     }
-    throw lastError ?? new GroqProviderError("rate_limited", "Gemini is temporarily unavailable.", true);
+    if (attemptsMade > 0 && !lastError) {
+      throw new GroqProviderError("temporary_failure", "Gemini keys are temporarily unavailable. Please retry later.", true);
+    }
+    throw lastError ? new GroqProviderError("temporary_failure", "All configured Gemini keys are temporarily unavailable. Please retry later.", true) : new GroqProviderError("temporary_failure", "All configured Gemini keys are temporarily unavailable. Please retry later.", true);
   }
   async request(key, request, stream, onToken) {
     const controller = new AbortController();
@@ -292,13 +366,14 @@ var GeminiProvider = class {
   async toProviderError(response) {
     const body = parseJson(await response.text());
     const detail = body?.error?.message ?? "";
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401 || response.status === 403 && !/(quota|rate limit|resource exhausted|capacity)/i.test(detail)) {
       return new GroqProviderError("invalid_configuration", "Gemini provider configuration is invalid.");
     }
     if (response.status === 404) {
       return new GroqProviderError("model_unavailable", "The selected Gemini model is unavailable.");
     }
-    if (response.status === 429) return new GroqProviderError("rate_limited", "Gemini is rate limited.", true);
+    if (response.status === 429 || response.status === 403 && /(quota|rate limit|resource exhausted|capacity)/i.test(detail)) return new GroqProviderError("rate_limited", "Gemini is rate limited.", true);
+    if (response.status === 408) return new GroqProviderError("temporary_failure", "Gemini is temporarily unavailable.", true);
     if (response.status >= 500) return new GroqProviderError("temporary_failure", "Gemini is temporarily unavailable.", true);
     if (response.status === 400 && /(context|token|prompt).*(limit|length|too large)|maximum context/i.test(detail)) {
       return new GroqProviderError("context_limit", "The request exceeded the model context limit.", true);
@@ -334,6 +409,13 @@ function parseJson(value) {
   } catch {
     return null;
   }
+}
+function approximateRequestChars(request) {
+  return request.messages.reduce((total, message) => total + message.content.length, 0);
+}
+async function waitForRetry(attempt) {
+  const delay = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** attempt);
+  await new Promise((resolve) => setTimeout(resolve, delay));
 }
 export {
   GeminiProvider

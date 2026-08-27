@@ -1,27 +1,20 @@
-export type ContextSource = { path: string; startLine?: number; endLine?: number };
-
-export const MAX_CONTEXT_CHARS = 64_000;
-export const RETRY_CONTEXT_CHARS = 32_000;
-export const MAX_FILE_CHARS = 12_000;
-let lastContextStatus = { filesIncluded: 0, approximateChars: 0, chunked: false, lastWarnings: [] as string[] };
-
-export function chunkContext(
-  path: string,
-  content: string,
-  budget: number,
-  focus?: { startLine: number; endLine: number },
-): { text: string; startLine: number; endLine: number; chunked: boolean } {
+// src/repository/context-manager.ts
+var MAX_CONTEXT_CHARS = 64e3;
+var RETRY_CONTEXT_CHARS = 32e3;
+var MAX_FILE_CHARS = 12e3;
+var lastContextStatus = { filesIncluded: 0, approximateChars: 0, chunked: false, lastWarnings: [] };
+function chunkContext(path, content, budget, focus) {
   const take = Math.min(MAX_FILE_CHARS, Math.max(0, budget));
   const allLines = content.split("\n");
   if (content.length <= take) {
     return {
-      text: `### ${path} (lines 1-${allLines.length})\n${content}`,
+      text: `### ${path} (lines 1-${allLines.length})
+${content}`,
       startLine: 1,
       endLine: allLines.length,
-      chunked: false,
+      chunked: false
     };
   }
-
   let start = focus ? Math.max(0, focus.startLine - 1) : 0;
   let end = focus ? Math.min(allLines.length, Math.max(focus.endLine, focus.startLine)) : allLines.length;
   const length = () => allLines.slice(start, end).join("\n").length;
@@ -36,17 +29,24 @@ export function chunkContext(
   }
   const text = allLines.slice(start, end).join("\n").slice(0, take);
   return {
-    text: `### ${path} (lines ${start + 1}-${Math.min(allLines.length, start + text.split("\n").length)})\n${text}`,
+    text: `### ${path} (lines ${start + 1}-${Math.min(allLines.length, start + text.split("\n").length)})
+${text}`,
     startLine: start + 1,
     endLine: Math.min(allLines.length, start + text.split("\n").length),
-    chunked: true,
+    chunked: true
   };
 }
-
-export function recordContextStatus(status: typeof lastContextStatus): void {
+function recordContextStatus(status) {
   lastContextStatus = status;
 }
-
-export function getContextResourceStatus(): typeof lastContextStatus {
+function getContextResourceStatus() {
   return { ...lastContextStatus, lastWarnings: [...lastContextStatus.lastWarnings] };
 }
+export {
+  MAX_CONTEXT_CHARS,
+  MAX_FILE_CHARS,
+  RETRY_CONTEXT_CHARS,
+  chunkContext,
+  getContextResourceStatus,
+  recordContextStatus
+};

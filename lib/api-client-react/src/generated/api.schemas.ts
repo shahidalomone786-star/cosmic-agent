@@ -33,8 +33,9 @@ export type ResourceStatusAiKeysItemStatus = typeof ResourceStatusAiKeysItemStat
 
 
 export const ResourceStatusAiKeysItemStatus = {
-  healthy: 'healthy',
-  cooldown: 'cooldown',
+  available: 'available',
+  rate_limited: 'rate_limited',
+  temporarily_failed: 'temporarily_failed',
   unavailable: 'unavailable',
 } as const;
 

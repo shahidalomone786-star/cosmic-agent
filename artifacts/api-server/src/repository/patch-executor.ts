@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { ChangeProposal } from "../ai/change-proposal";
-import type { RepositoryRef } from "./github-provider";
+import { invalidateRepositoryContext, type RepositoryRef } from "./github-provider";
 import { githubWriteProvider } from "./github-write-provider";
 import { assertApproval, type ProposalApproval } from "../ai/approval-gate";
 
@@ -305,6 +305,7 @@ export async function pushProposal(proposalId: string, approvalId: string): Prom
   const comparison = await githubWriteProvider.compareBranch(review.repository, review.branch, expectedHeadSha);
   if (!comparison.unchanged) throw new PatchExecutionError("validation_failed", "Remote branch changed. Push was cancelled to protect existing work.");
   const pushed = await githubWriteProvider.pushBranch(review.repository, review.branch, expectedHeadSha, session.commit.commitSha);
+  invalidateRepositoryContext(review.repository);
   return { status: "pushed", ...pushed, proposalId };
 }
 

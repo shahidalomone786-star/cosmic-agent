@@ -367,11 +367,11 @@ router.post("/ai/chat", async (req, res) => {
     let prepared = await withRepositoryContext(parsed.data);
     let result;
     try {
-      result = await provider.chat(prepared);
+      result = await provider.chat({ ...prepared, role: "manager" });
     } catch (error) {
       if (!(error instanceof GroqProviderError) || error.code !== "context_limit" || !parsed.data.repositoryContext) throw error;
       prepared = await withRepositoryContext(parsed.data, RETRY_CONTEXT_CHARS);
-      result = await provider.chat(prepared);
+       result = await provider.chat({ ...prepared, role: "manager" });
     }
     res.json(SendAiMessageResponse.parse({ ...result, repositoryContext: prepared.repositoryContextUsed }));
   } catch (error) {
@@ -400,11 +400,11 @@ router.post("/ai/chat/stream", async (req, res) => {
       res.write(`data: ${JSON.stringify({ token })}\n\n`);
     };
     try {
-      result = await provider.stream(prepared, emitToken);
+      result = await provider.stream({ ...prepared, role: "manager" }, emitToken);
     } catch (error) {
       if (!(error instanceof GroqProviderError) || error.code !== "context_limit" || !parsed.data.repositoryContext) throw error;
       prepared = await withRepositoryContext(parsed.data, RETRY_CONTEXT_CHARS);
-      result = await provider.stream(prepared, emitToken);
+       result = await provider.stream({ ...prepared, role: "manager" }, emitToken);
     }
     res.write(`data: ${JSON.stringify({ done: true, response: { ...result, repositoryContext: prepared.repositoryContextUsed } })}\n\n`);
     res.write("data: [DONE]\n\n");
@@ -435,6 +435,7 @@ type PreparedAiRequest = {
   model: string;
   messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   temperature?: number | null;
+  role?: "manager";
   repositoryContext?: { repository: RepositoryRef; paths: string[] };
   repositoryContextUsed?: {
     paths: string[];
@@ -454,6 +455,8 @@ async function withRepositoryContext(request: PreparedAiRequest, contextBudget?:
       "Do not infer or invent framework, package manager, entry point, authentication, database, or architecture details.",
       "Tell the user that repository evidence is unavailable and ask them to retry later.",
     ].join("\n"),
+    summaryText: "Repository evidence is currently unavailable. Do not infer repository facts.",
+    sourceText: "",
     sources: [],
     warnings: ["Repository evidence is unavailable; no source context was sent."],
     approximateChars: 0,

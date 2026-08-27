@@ -9,7 +9,7 @@ export class GeminiKeyManager extends GroqKeyManager {
   }
 
   static readConfiguredSecrets(): string[] {
-    return Array.from({ length: 5 }, (_, index) => process.env[`GEMINI_API_KEY_${index + 1}`]?.trim() ?? "")
+    return Array.from({ length: 12 }, (_, index) => process.env[`GEMINI_API_KEY_${index + 1}`]?.trim() ?? "")
       .filter(Boolean);
   }
 }

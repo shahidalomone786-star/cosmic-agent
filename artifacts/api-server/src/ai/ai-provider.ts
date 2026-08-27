@@ -1,4 +1,5 @@
 export type AiMessageRole = "user" | "assistant" | "system";
+export type AiRequestRole = "manager" | "frontend" | "backend" | "reviewer" | "validator";
 
 export interface AiChatMessage {
   role: AiMessageRole;
@@ -19,6 +20,7 @@ export interface AiChatRequest {
   model: string;
   messages: AiChatMessage[];
   temperature?: number | null;
+  role?: AiRequestRole;
 }
 
 export interface AiChatResponse {

@@ -5,14 +5,18 @@ import type {
   AiProvider,
   ProviderHealth,
 } from "./ai-provider";
+import type { AiRequestRole } from "./ai-provider";
 import { GroqProviderError } from "./groq-provider";
 import { geminiKeyManager, type GeminiKeyManager } from "./gemini-key-manager";
 import { GEMINI_MODEL_ID } from "./model-registry";
 import { logger } from "../lib/logger";
+import { recordProviderMetric } from "./provider-metrics";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const REQUEST_TIMEOUT_MS = 45_000;
-const MAX_ATTEMPTS = 2;
+const MAX_ATTEMPTS = 12;
+const RETRY_BASE_DELAY_MS = 25;
+const RETRY_MAX_DELAY_MS = 500;
 
 type GeminiResponse = {
   responseId?: string;
@@ -67,9 +71,13 @@ export class GeminiProvider implements AiProvider {
 
     let lastError: GroqProviderError | undefined;
     let emitted = false;
+    let attemptsMade = 0;
+    let rateLimited = false;
+    const startedAt = Date.now();
     for (let attempt = 0; attempt < Math.min(configured, MAX_ATTEMPTS); attempt += 1) {
       const lease = this.keyManager.acquire();
       if (!lease) break;
+      attemptsMade += 1;
       try {
         const result = await this.request(lease.secret, request, stream, (token) => {
           emitted = true;
@@ -79,18 +87,51 @@ export class GeminiProvider implements AiProvider {
           throw new GroqProviderError("incomplete_response", "Gemini returned an incomplete response.", true);
         }
         this.keyManager.markSuccess(lease.id);
+        recordProviderMetric({
+          provider: "gemini",
+          role: request.role as AiRequestRole | undefined,
+          keySlot: lease.id,
+          success: true,
+          retryCount: attempt,
+          rateLimited,
+          approximateInputChars: approximateRequestChars(request),
+          approximateOutputChars: extractText(result).length,
+          durationMs: Date.now() - startedAt,
+        });
         return result;
       } catch (error) {
         lastError = error instanceof GroqProviderError
           ? error
           : new GroqProviderError("temporary_failure", "Gemini request failed.", true);
-        if (lastError.code === "rate_limited") this.keyManager.markRateLimited(lease.id);
+        if (lastError.code === "rate_limited") {
+          rateLimited = true;
+          this.keyManager.markRateLimited(lease.id);
+        }
         else if (lastError.code === "invalid_configuration") this.keyManager.markFailure(lease.id, true);
         else if (lastError.retryable) this.keyManager.markFailure(lease.id);
+        recordProviderMetric({
+          provider: "gemini",
+          role: request.role as AiRequestRole | undefined,
+          keySlot: lease.id,
+          success: false,
+          retryCount: attempt,
+          rateLimited: lastError.code === "rate_limited",
+          approximateInputChars: approximateRequestChars(request),
+          approximateOutputChars: 0,
+          durationMs: Date.now() - startedAt,
+        });
         if (!lastError.retryable || (stream && emitted)) throw lastError;
+        if (attempt + 1 < Math.min(configured, MAX_ATTEMPTS)) {
+          await waitForRetry(attempt);
+        }
       }
     }
-    throw lastError ?? new GroqProviderError("rate_limited", "Gemini is temporarily unavailable.", true);
+    if (attemptsMade > 0 && !lastError) {
+      throw new GroqProviderError("temporary_failure", "Gemini keys are temporarily unavailable. Please retry later.", true);
+    }
+    throw lastError
+      ? new GroqProviderError("temporary_failure", "All configured Gemini keys are temporarily unavailable. Please retry later.", true)
+      : new GroqProviderError("temporary_failure", "All configured Gemini keys are temporarily unavailable. Please retry later.", true);
   }
 
   private async request(
@@ -111,7 +152,7 @@ export class GeminiProvider implements AiProvider {
         body: JSON.stringify(toGeminiBody(request)),
         signal: controller.signal,
       });
-      logger.info({ provider: "gemini", model: modelId, status: response.status }, "Gemini provider response");
+       logger.info({ provider: "gemini", model: modelId, status: response.status }, "Gemini provider response");
       if (!response.ok) throw await this.toProviderError(response);
       if (stream) return this.readStream(response, onToken ?? (() => undefined));
       return await response.json() as GeminiResponse;
@@ -159,13 +200,14 @@ export class GeminiProvider implements AiProvider {
   private async toProviderError(response: Response): Promise<GroqProviderError> {
     const body = parseJson(await response.text()) as { error?: { message?: string } } | null;
     const detail = body?.error?.message ?? "";
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401 || (response.status === 403 && !/(quota|rate limit|resource exhausted|capacity)/i.test(detail))) {
       return new GroqProviderError("invalid_configuration", "Gemini provider configuration is invalid.");
     }
     if (response.status === 404) {
       return new GroqProviderError("model_unavailable", "The selected Gemini model is unavailable.");
     }
-    if (response.status === 429) return new GroqProviderError("rate_limited", "Gemini is rate limited.", true);
+    if (response.status === 429 || (response.status === 403 && /(quota|rate limit|resource exhausted|capacity)/i.test(detail))) return new GroqProviderError("rate_limited", "Gemini is rate limited.", true);
+    if (response.status === 408) return new GroqProviderError("temporary_failure", "Gemini is temporarily unavailable.", true);
     if (response.status >= 500) return new GroqProviderError("temporary_failure", "Gemini is temporarily unavailable.", true);
     if (response.status === 400 && /(context|token|prompt).*(limit|length|too large)|maximum context/i.test(detail)) {
       return new GroqProviderError("context_limit", "The request exceeded the model context limit.", true);
@@ -201,4 +243,13 @@ function extractText(response: GeminiResponse): string {
 
 function parseJson(value: string): unknown {
   try { return JSON.parse(value); } catch { return null; }
+}
+
+function approximateRequestChars(request: AiChatRequest): number {
+  return request.messages.reduce((total, message) => total + message.content.length, 0);
+}
+
+async function waitForRetry(attempt: number): Promise<void> {
+  const delay = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * (2 ** attempt));
+  await new Promise((resolve) => setTimeout(resolve, delay));
 }

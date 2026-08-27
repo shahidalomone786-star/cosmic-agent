@@ -605,7 +605,7 @@ components:
                 type: object
                 properties:
                   id: { type: string }
-                  status: { type: string, enum: [healthy, cooldown, unavailable] }
+                  status: { type: string, enum: [available, rate_limited, temporarily_failed, unavailable] }
                   cooldownUntil: { type: [number, "null"] }
                   rateLimitCount: { type: number }
                 required: [id, status, rateLimitCount]

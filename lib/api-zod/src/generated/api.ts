@@ -45,7 +45,7 @@ export const GetAiResourcesResponse = zod.object({
   "availableKeyCount": zod.number(),
   "keys": zod.array(zod.object({
   "id": zod.string(),
-  "status": zod.enum(['healthy', 'cooldown', 'unavailable']),
+  "status": zod.enum(['available', 'rate_limited', 'temporarily_failed', 'unavailable']),
   "cooldownUntil": zod.number().nullish(),
   "rateLimitCount": zod.number()
 }))

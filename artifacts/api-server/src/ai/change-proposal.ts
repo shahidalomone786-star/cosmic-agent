@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readRepositoryFile, retrieveRepositoryContext, RepositoryError, type RepositoryRef } from "../repository/github-provider";
-import type { AiChatMessage, AiProvider } from "./ai-provider";
+import type { AiChatMessage, AiProvider, AiRequestRole } from "./ai-provider";
 import { ROLE_SYSTEM_PROMPTS } from "./manager-brain";
 
 export type ProposalRisk = "LOW" | "MEDIUM" | "HIGH";
@@ -72,6 +72,7 @@ export async function createChangeProposal(
   request: string,
   repository: RepositoryRef,
   paths: string[],
+  role: AiRequestRole = "manager",
 ): Promise<ChangeProposal> {
   if (!request.trim()) throw new ProposalError("invalid_patch", "Describe the change you want to preview.");
 
@@ -145,8 +146,8 @@ export async function createChangeProposal(
         `Repository: ${repository.owner}/${repository.name} (${repository.branch})`,
         `Requested change: ${request.trim()}`,
         `Allowed files: ${allowedPaths.join(", ")}`,
-        "Indexed context:",
-        context.text,
+         "Indexed repository summary:",
+         context.summaryText,
         "Exact source files:",
         boundedSource,
       ].join("\n\n"),
@@ -155,7 +156,7 @@ export async function createChangeProposal(
 
   let modelResponse;
   try {
-    modelResponse = await provider.chat({ model, messages, temperature: 0.1 });
+    modelResponse = await provider.chat({ model, messages, temperature: 0.1, role });
   } catch (error) {
     throw mapProviderError(error);
   }

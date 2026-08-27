@@ -4070,7 +4070,7 @@ var GetAiResourcesResponse = objectType({
     "availableKeyCount": numberType(),
     "keys": arrayType(objectType({
       "id": stringType(),
-      "status": enumType(["healthy", "cooldown", "unavailable"]),
+      "status": enumType(["available", "rate_limited", "temporarily_failed", "unavailable"]),
       "cooldownUntil": numberType().nullish(),
       "rateLimitCount": numberType()
     }))

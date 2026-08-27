@@ -76,6 +76,7 @@ const BRANCH_SHA_CACHE = new Map<string, { expiresAt: number; sha: string }>();
 const SEARCH_CACHE = new Map<string, { expiresAt: number; results: Array<{ path: string; line: number; context: string }> }>();
 const METADATA_CACHE = new Map<string, { expiresAt: number; repo: { id: number; html_url: string; default_branch: string; full_name: string } }>();
 const DIRECTORY_CACHE = new Map<string, { expiresAt: number; entries: TreeEntry[] }>();
+const CONTEXT_CACHE = new Map<string, { expiresAt: number; result: RepositoryContextResult }>();
 
 export class RepositoryError extends Error {
   constructor(
@@ -379,6 +380,8 @@ export async function getRepositoryOverview(repository: RepositoryRef): Promise<
 type ContextSource = { path: string; startLine?: number; endLine?: number };
 export type RepositoryContextResult = {
   text: string;
+  summaryText: string;
+  sourceText: string;
   sources: ContextSource[];
   warnings: string[];
   approximateChars: number;
@@ -391,8 +394,22 @@ export async function retrieveRepositoryContext(
   question: string,
   contextBudget = MAX_CONTEXT_CHARS,
 ): Promise<RepositoryContextResult> {
+  const requestedPaths = [...new Set(paths.map((path) => path.replace(/^@/, "").trim()).filter(Boolean))];
+  const contextCacheKey = `${repositoryCacheKey(repository)}?context=${requestedPaths.sort().join(",")}&question=${question.trim().toLowerCase()}&budget=${contextBudget}`;
+  const cachedContext = CONTEXT_CACHE.get(contextCacheKey);
+  if (cachedContext && cachedContext.expiresAt > Date.now()) {
+    recordCacheHit();
+    recordContextStatus({
+      filesIncluded: cachedContext.result.sources.length,
+      approximateChars: cachedContext.result.approximateChars,
+      chunked: cachedContext.result.chunked,
+      lastWarnings: [...cachedContext.result.warnings],
+    });
+    return cloneContextResult(cachedContext.result);
+  }
+  recordCacheMiss();
   const overview = await getRepositoryOverview(repository);
-  const requestedExplicit = [...new Set(paths.map((path) => path.replace(/^@/, "").trim()).filter(Boolean))];
+  const requestedExplicit = requestedPaths;
   const explicit = resolveExplicitPaths(requestedExplicit, overview.files);
   const missingExplicit = requestedExplicit.filter((path) => !explicit.includes(path) && !overview.files.some((file) => file.path === path));
   const omittedExplicit = requestedExplicit.filter((path) => !explicit.includes(path) && !missingExplicit.includes(path));
@@ -400,8 +417,7 @@ export async function retrieveRepositoryContext(
   const selected = [...explicit.map((path) => overview.files.find((file) => file.path === path)).filter((file): file is IndexedFile => Boolean(file)), ...ranked]
     .filter((file, index, all) => all.findIndex((candidate) => candidate.path === file.path) === index)
     .slice(0, 8);
-  const snippets: string[] = [
-    [
+  const summaryText = [
       "Repository intelligence summary (ground truth from the indexed tree):",
       `- Repository: ${overview.repository.owner}/${overview.repository.name}`,
       `- Branch: ${overview.repository.branch}`,
@@ -412,14 +428,15 @@ export async function retrieveRepositoryContext(
       `- Architecture layers: ${overview.architecture.map((layer) => `${layer.layer} (${layer.paths.slice(0, 4).join(", ")})`).join("; ") || "none detected"}`,
       "",
       "Grounding rules: Use only this summary and the source excerpts below. Do not guess frameworks, authentication, routes, or data stores that are not evidenced here. If the excerpts do not establish a detail, say that it is not established. Cite exact file paths in backticks.",
-    ].join("\n"),
-  ];
+    ].join("\n");
+  const notices: string[] = [];
   const warnings = [
     ...(missingExplicit.length ? [`Explicit files not found or not readable: ${missingExplicit.join(", ")}`] : []),
     ...(omittedExplicit.length ? [`Explicit files omitted because the bounded context budget was reached: ${omittedExplicit.join(", ")}`] : []),
   ];
-  if (warnings.length) snippets.push(`Context selection notice:\n${warnings.join("\n")}`);
+  if (warnings.length) notices.push(`Context selection notice:\n${warnings.join("\n")}`);
   const sources: ContextSource[] = [];
+  const sourceSnippets: string[] = [];
   let totalChars = 0;
   let chunked = false;
   for (const file of selected) {
@@ -432,10 +449,10 @@ export async function retrieveRepositoryContext(
     try {
       const result = await readRepositoryFile(repository, file.path);
       const content = result.content;
-      const selectedChunk = chunkContext(result.path, content, contextBudget - totalChars);
       const range = relevantLineRange(content.split("\n"), question);
-      snippets.push(selectedChunk.text);
-      sources.push({ path: result.path, ...(range ?? { startLine: selectedChunk.startLine, endLine: selectedChunk.endLine }) });
+      const selectedChunk = chunkContext(result.path, content, contextBudget - totalChars, range);
+       sourceSnippets.push(selectedChunk.text);
+       sources.push({ path: result.path, startLine: selectedChunk.startLine, endLine: selectedChunk.endLine });
       totalChars += selectedChunk.text.length;
       chunked ||= selectedChunk.chunked;
     } catch {
@@ -445,7 +462,26 @@ export async function retrieveRepositoryContext(
   }
   const uniqueWarnings = [...new Set(warnings)];
   recordContextStatus({ filesIncluded: sources.length, approximateChars: totalChars, chunked, lastWarnings: uniqueWarnings });
-  return { text: snippets.join("\n\n"), sources, warnings: uniqueWarnings, approximateChars: totalChars, chunked };
+  const sourceText = sourceSnippets.join("\n\n");
+  const result = {
+    text: [summaryText, ...notices, sourceText].filter(Boolean).join("\n\n"),
+    summaryText,
+    sourceText,
+    sources,
+    warnings: uniqueWarnings,
+    approximateChars: totalChars,
+    chunked,
+  };
+  CONTEXT_CACHE.set(contextCacheKey, { expiresAt: Date.now() + INDEX_TTL_MS, result });
+  return cloneContextResult(result);
+}
+
+function cloneContextResult(result: RepositoryContextResult): RepositoryContextResult {
+  return {
+    ...result,
+    sources: result.sources.map((source) => ({ ...source })),
+    warnings: [...result.warnings],
+  };
 }
 
 async function resolveBranchSha(owner: string, name: string, branch: string): Promise<string> {
@@ -465,14 +501,25 @@ async function resolveBranchSha(owner: string, name: string, branch: string): Pr
   });
   if (!ref.object?.sha) throw new RepositoryError("branch_not_found", "Branch not found on the repository.");
   if (cached && cached.sha !== ref.object.sha) {
-    const prefix = `${owner}/${name}#${branch}`;
+    const prefix = `${repositoryCacheScope()}:${owner}/${name}#${branch}`;
     for (const key of [...REPOSITORY_CACHE.keys()]) if (key.startsWith(prefix)) REPOSITORY_CACHE.delete(key);
     for (const key of [...FILE_CACHE.keys()]) if (key.startsWith(prefix)) FILE_CACHE.delete(key);
     for (const key of [...SEARCH_CACHE.keys()]) if (key.startsWith(prefix)) SEARCH_CACHE.delete(key);
     for (const key of [...DIRECTORY_CACHE.keys()]) if (key.startsWith(prefix)) DIRECTORY_CACHE.delete(key);
+    for (const key of [...CONTEXT_CACHE.keys()]) if (key.startsWith(prefix)) CONTEXT_CACHE.delete(key);
   }
   BRANCH_SHA_CACHE.set(cacheKey, { expiresAt: Date.now() + INDEX_TTL_MS, sha: ref.object.sha });
   return ref.object.sha;
+}
+
+export function invalidateRepositoryContext(repository: RepositoryRef): void {
+  const prefix = repositoryCacheKey(repository);
+  for (const key of [...REPOSITORY_CACHE.keys()]) if (key.startsWith(prefix)) REPOSITORY_CACHE.delete(key);
+  for (const key of [...FILE_CACHE.keys()]) if (key.startsWith(prefix)) FILE_CACHE.delete(key);
+  for (const key of [...SEARCH_CACHE.keys()]) if (key.startsWith(prefix)) SEARCH_CACHE.delete(key);
+  for (const key of [...DIRECTORY_CACHE.keys()]) if (key.startsWith(prefix)) DIRECTORY_CACHE.delete(key);
+  for (const key of [...CONTEXT_CACHE.keys()]) if (key.startsWith(prefix)) CONTEXT_CACHE.delete(key);
+  BRANCH_SHA_CACHE.delete(`${repository.owner}/${repository.name}#${repository.branch}`);
 }
 
 async function getRepositoryTree(repository: RepositoryRef): Promise<GitHubTreeEntry[]> {
