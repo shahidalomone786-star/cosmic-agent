@@ -14,8 +14,12 @@ export function assertSafePush(branch: string, configuredBranch: string, force?:
   if (force === true || branch !== configuredBranch) throw new Error("Force push and unrelated branch updates are not permitted.");
 }
 
-export function redactGitSensitive(value: string): string {
-  return value
-    .replace(/(Bearer\s+|gh[pousr]_)[A-Za-z0-9._-]+/gi, "$1[redacted]")
+export function redactGitSensitive(value: string, additionalSensitiveValues: string[] = []): string {
+  let redacted = value
+    .replace(/(Bearer\s+|(?:gh[pousr]|github_pat)_)[A-Za-z0-9._-]+/gi, "$1[redacted]")
     .replace(/-----BEGIN[\s\S]*?-----END [^-]+-----/gi, "[redacted-private-key]");
+  for (const sensitive of additionalSensitiveValues) {
+    if (sensitive) redacted = redacted.split(sensitive).join("[redacted]");
+  }
+  return redacted;
 }

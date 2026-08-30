@@ -7,6 +7,7 @@ import settingsRouter from "./settings";
 import { getPreview, proxyPreview, startPreview, stopPreview } from "../preview-runtime";
 import { findWorkspaceProposal, getRegisteredProposal } from "../repository/patch-executor";
 import workspaceRouter from "./workspace";
+import rufloRouter from "./ruflo";
 
 const router: IRouter = Router();
 
@@ -16,6 +17,7 @@ router.use(repositoryRouter);
 router.use(authRouter);
 router.use(settingsRouter);
 router.use(workspaceRouter);
+router.use(rufloRouter);
 
 router.use((req, res, next) => {
   if (!req.path.startsWith("/preview")) { next(); return; }

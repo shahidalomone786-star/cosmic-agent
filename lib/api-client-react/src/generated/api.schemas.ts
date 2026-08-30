@@ -997,6 +997,37 @@ export interface PushResult {
   shortSha: string;
 }
 
+export type RepositoryWritePermissionPermission = typeof RepositoryWritePermissionPermission[keyof typeof RepositoryWritePermissionPermission];
+
+
+export const RepositoryWritePermissionPermission = {
+  admin: 'admin',
+  push: 'push',
+  pull: 'pull',
+  none: 'none',
+} as const;
+
+export interface RepositoryWritePermission {
+  repository: RepositoryRef;
+  branch: string;
+  headSha: string;
+  canPush: boolean;
+  permission: RepositoryWritePermissionPermission;
+}
+
+export type RufloGitCommitReview = CommitReview & {
+  permission: RepositoryWritePermission;
+};
+
+export type RufloGitPushReview = PushReview & {
+  permission: RepositoryWritePermission;
+};
+
+export type RufloGitPushResult = PushResult & {
+  verified: true;
+  remoteHeadSha: string;
+};
+
 export interface RepositoryConnectInput {
   repositoryUrl: string;
   branch?: string;

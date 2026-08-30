@@ -53,6 +53,9 @@ import type {
   ResourceStatus,
   ReviewRequest,
   ReviewResult,
+  RufloGitCommitReview,
+  RufloGitPushResult,
+  RufloGitPushReview,
   SubmitWorkerReport200,
   WorkerReport,
   WorkerToolRequest
@@ -1556,6 +1559,298 @@ export const usePushChangeProposal = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getPushChangeProposalMutationOptions(options));
+    }
+
+export const getGetRufloGitCommitReviewUrl = (sessionId: string,) => {
+
+
+
+
+  return `/api/ruflo/sessions/${sessionId}/git/commit-review`
+}
+
+/**
+ * Performs a non-destructive GitHub permission and branch check, then returns the final validated diff summary. No commit or push occurs.
+ * @summary Review validated Ruflo changes before commit approval
+ */
+export const getRufloGitCommitReview = async (sessionId: string,
+    proposalActionInput: ProposalActionInput, options?: Parameters<typeof customFetch>[1]): Promise<RufloGitCommitReview> => {
+
+  return customFetch<RufloGitCommitReview>(getGetRufloGitCommitReviewUrl(sessionId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(proposalActionInput)
+  }
+);}
+
+
+
+
+
+export const getGetRufloGitCommitReviewMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getRufloGitCommitReview>>, TError,{sessionId: string;data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof getRufloGitCommitReview>>, TError,{sessionId: string;data: BodyType<ProposalActionInput>}, TContext> => {
+
+const mutationKey = ['getRufloGitCommitReview'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof getRufloGitCommitReview>>, {sessionId: string;data: BodyType<ProposalActionInput>}> = (props) => {
+          const {sessionId,data} = props ?? {};
+
+          return  getRufloGitCommitReview(sessionId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GetRufloGitCommitReviewMutationResult = NonNullable<Awaited<ReturnType<typeof getRufloGitCommitReview>>>
+    export type GetRufloGitCommitReviewMutationBody = BodyType<ProposalActionInput>
+    export type GetRufloGitCommitReviewMutationError = ErrorType<void>
+
+    /**
+ * @summary Review validated Ruflo changes before commit approval
+ */
+export const useGetRufloGitCommitReview = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getRufloGitCommitReview>>, TError,{sessionId: string;data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof getRufloGitCommitReview>>,
+        TError,
+        {sessionId: string;data: BodyType<ProposalActionInput>},
+        TContext
+      > => {
+      return useMutation(getGetRufloGitCommitReviewMutationOptions(options));
+    }
+
+export const getCommitRufloChangesUrl = (sessionId: string,) => {
+
+
+
+
+  return `/api/ruflo/sessions/${sessionId}/git/commit`
+}
+
+/**
+ * Requires the exact approved code proposal, apply approval, and separate commit approval. Creates a commit object only; the branch is not updated.
+ * @summary Create a Ruflo commit after explicit Git approval
+ */
+export const commitRufloChanges = async (sessionId: string,
+    commitChangeProposalInput: CommitChangeProposalInput, options?: Parameters<typeof customFetch>[1]): Promise<CommitResult> => {
+
+  return customFetch<CommitResult>(getCommitRufloChangesUrl(sessionId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(commitChangeProposalInput)
+  }
+);}
+
+
+
+
+
+export const getCommitRufloChangesMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof commitRufloChanges>>, TError,{sessionId: string;data: BodyType<CommitChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof commitRufloChanges>>, TError,{sessionId: string;data: BodyType<CommitChangeProposalInput>}, TContext> => {
+
+const mutationKey = ['commitRufloChanges'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof commitRufloChanges>>, {sessionId: string;data: BodyType<CommitChangeProposalInput>}> = (props) => {
+          const {sessionId,data} = props ?? {};
+
+          return  commitRufloChanges(sessionId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CommitRufloChangesMutationResult = NonNullable<Awaited<ReturnType<typeof commitRufloChanges>>>
+    export type CommitRufloChangesMutationBody = BodyType<CommitChangeProposalInput>
+    export type CommitRufloChangesMutationError = ErrorType<void>
+
+    /**
+ * @summary Create a Ruflo commit after explicit Git approval
+ */
+export const useCommitRufloChanges = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof commitRufloChanges>>, TError,{sessionId: string;data: BodyType<CommitChangeProposalInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof commitRufloChanges>>,
+        TError,
+        {sessionId: string;data: BodyType<CommitChangeProposalInput>},
+        TContext
+      > => {
+      return useMutation(getCommitRufloChangesMutationOptions(options));
+    }
+
+export const getGetRufloGitPushReviewUrl = (sessionId: string,) => {
+
+
+
+
+  return `/api/ruflo/sessions/${sessionId}/git/push-review`
+}
+
+/**
+ * Rechecks repository permission and returns the server-held commit. No push occurs.
+ * @summary Review a Ruflo commit before push approval
+ */
+export const getRufloGitPushReview = async (sessionId: string,
+    proposalActionInput: ProposalActionInput, options?: Parameters<typeof customFetch>[1]): Promise<RufloGitPushReview> => {
+
+  return customFetch<RufloGitPushReview>(getGetRufloGitPushReviewUrl(sessionId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(proposalActionInput)
+  }
+);}
+
+
+
+
+
+export const getGetRufloGitPushReviewMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getRufloGitPushReview>>, TError,{sessionId: string;data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof getRufloGitPushReview>>, TError,{sessionId: string;data: BodyType<ProposalActionInput>}, TContext> => {
+
+const mutationKey = ['getRufloGitPushReview'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof getRufloGitPushReview>>, {sessionId: string;data: BodyType<ProposalActionInput>}> = (props) => {
+          const {sessionId,data} = props ?? {};
+
+          return  getRufloGitPushReview(sessionId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type GetRufloGitPushReviewMutationResult = NonNullable<Awaited<ReturnType<typeof getRufloGitPushReview>>>
+    export type GetRufloGitPushReviewMutationBody = BodyType<ProposalActionInput>
+    export type GetRufloGitPushReviewMutationError = ErrorType<void>
+
+    /**
+ * @summary Review a Ruflo commit before push approval
+ */
+export const useGetRufloGitPushReview = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof getRufloGitPushReview>>, TError,{sessionId: string;data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof getRufloGitPushReview>>,
+        TError,
+        {sessionId: string;data: BodyType<ProposalActionInput>},
+        TContext
+      > => {
+      return useMutation(getGetRufloGitPushReviewMutationOptions(options));
+    }
+
+export const getPushRufloChangesUrl = (sessionId: string,) => {
+
+
+
+
+  return `/api/ruflo/sessions/${sessionId}/git/push`
+}
+
+/**
+ * Requires separate push approval, performs a fast-forward-only branch update, and verifies the remote branch points to the approved commit. Never force-pushes or retries automatically.
+ * @summary Push a Ruflo commit after explicit push approval
+ */
+export const pushRufloChanges = async (sessionId: string,
+    proposalActionInput: ProposalActionInput, options?: Parameters<typeof customFetch>[1]): Promise<RufloGitPushResult> => {
+
+  return customFetch<RufloGitPushResult>(getPushRufloChangesUrl(sessionId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(proposalActionInput)
+  }
+);}
+
+
+
+
+
+export const getPushRufloChangesMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pushRufloChanges>>, TError,{sessionId: string;data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof pushRufloChanges>>, TError,{sessionId: string;data: BodyType<ProposalActionInput>}, TContext> => {
+
+const mutationKey = ['pushRufloChanges'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof pushRufloChanges>>, {sessionId: string;data: BodyType<ProposalActionInput>}> = (props) => {
+          const {sessionId,data} = props ?? {};
+
+          return  pushRufloChanges(sessionId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PushRufloChangesMutationResult = NonNullable<Awaited<ReturnType<typeof pushRufloChanges>>>
+    export type PushRufloChangesMutationBody = BodyType<ProposalActionInput>
+    export type PushRufloChangesMutationError = ErrorType<void>
+
+    /**
+ * @summary Push a Ruflo commit after explicit push approval
+ */
+export const usePushRufloChanges = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof pushRufloChanges>>, TError,{sessionId: string;data: BodyType<ProposalActionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof pushRufloChanges>>,
+        TError,
+        {sessionId: string;data: BodyType<ProposalActionInput>},
+        TContext
+      > => {
+      return useMutation(getPushRufloChangesMutationOptions(options));
     }
 
 export const getConnectRepositoryUrl = () => {

@@ -23,7 +23,47 @@ type UsedSource = { path: string; startLine?: number; endLine?: number };
 type ContextUsage = { paths: string[]; sources: UsedSource[]; warnings?: string[]; approximateChars?: number; chunked?: boolean };
 type ChatMessage = { id: string; role: Role; content: string; createdAt: number; error?: boolean; streaming?: boolean; repositoryContext?: ContextUsage };
 type Conversation = { id: string; title: string; modelId: string; messages: ChatMessage[]; updatedAt: number };
-type RuntimeSession = AgentSession & { proposalData?: ChangeProposal };
+type RuntimeRole = 'frontend' | 'backend' | 'reviewer' | 'validator' | 'manager';
+type RuntimeSession = AgentSession & {
+  proposalData?: ChangeProposal;
+  orchestration: {
+    selectedWorkers: RuntimeRole[];
+    completedSubtasks: string[];
+    reviewStatus: 'pending' | 'completed' | 'blocked' | 'failed';
+  };
+  workerState: { completedToolIds: Record<string, string[]> };
+};
+type ComposerMode = 'chat' | 'agent' | 'ruflo';
+type RufloActivity = {
+  id: string;
+  label: 'Planning' | 'Inspecting Project' | 'Searching Files' | 'Reading Files' | 'Delegating' | 'Coding' | 'Reviewing' | 'Validating' | 'Fixing' | 'Waiting for Approval' | 'Applying' | 'GitHub' | 'Completed';
+  status: 'active' | 'complete' | 'failed';
+  timestamp: string;
+};
+type RufloClientSession = {
+  id: string;
+  mode: 'ruflo';
+  task: string;
+  status: 'running' | 'waiting' | 'completed' | 'failed';
+  phase: 'inspecting' | 'reviewing' | 'validating' | 'fixing' | 'waiting_approval' | 'completed' | 'failed';
+  currentLabel: RufloActivity['label'];
+  currentAgent: 'Ruflo Manager' | 'Planner' | 'Coder' | 'Reviewer' | 'Validator' | 'Fixer' | 'Human approval';
+  activity: RufloActivity[];
+  plan: string[];
+  affectedFiles: string[];
+  proposalStatus: 'not-created' | 'ready' | 'applied' | 'completed';
+  validationStatus: 'not-run' | 'pass' | 'fail' | 'not-verified';
+  git: { status: 'not-available' | 'not-requested' | 'ready' | 'committed' | 'pushed' | 'unavailable'; branch?: string };
+  memoryFactCount: number;
+  proposal?: ChangeProposal;
+  error?: { code: string; message: string };
+  recoveryAttempts: number;
+  maxRecoveryAttempts: number;
+  validation?: { status: 'pass' | 'fail' | 'not-verified'; summary: string };
+  workflowMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+};
 type SessionUser = { id: string; email: string };
 type GitHubStatus = { connected: boolean; status: 'connected' | 'invalid' | 'rate_limited' | 'unavailable' | 'not_connected'; lastValidatedAt?: string | null };
 
@@ -109,6 +149,20 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: SessionUser) 
   </section></main>;
 }
 
+function ComposerModePicker({ mode, open, onToggle, onChange }: { mode: ComposerMode; open: boolean; onToggle: () => void; onChange: (mode: ComposerMode) => void }) {
+  const label = mode === 'ruflo' ? 'Ruflo Mode' : mode === 'agent' ? 'Normal Agent' : 'Chat';
+  const options: Array<{ value: ComposerMode; label: string; description: string }> = [
+    { value: 'chat', label: 'Chat', description: 'Conversation and technical reasoning' },
+    { value: 'agent', label: 'Normal Agent', description: 'Approval-gated repository changes' },
+    { value: 'ruflo', label: 'Ruflo Mode', description: 'Bounded inspection, approval-gated changes' },
+  ];
+  return <div className="composer-mode-picker">
+    <button type="button" className="composer-plus" onClick={onToggle} aria-label="Choose agent mode" aria-haspopup="listbox" aria-expanded={open}><Plus size={15} /></button>
+    <button type="button" className={`mode-trigger ${mode}`} onClick={onToggle} aria-haspopup="listbox" aria-expanded={open}><span>{label}</span><ChevronDown size={13} /></button>
+    {open && <div className="composer-mode-menu" role="listbox" aria-label="Agent mode">{options.map((option) => <button type="button" role="option" aria-selected={mode === option.value} className={mode === option.value ? 'selected' : ''} key={option.value} onClick={() => onChange(option.value)}><span><strong>{option.label}</strong><small>{option.description}</small></span>{mode === option.value && <Check size={14} />}</button>)}</div>}
+  </div>;
+}
+
 function GitHubSettings({ onClose, notify }: { onClose: () => void; notify: (message: string) => void }) {
   const [status, setStatus] = useState<GitHubStatus | null>(null);
   const [token, setToken] = useState('');
@@ -140,10 +194,15 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState('');
   const [modelOpen, setModelOpen] = useState(false);
+  const [composerMode, setComposerMode] = useState<ComposerMode>('chat');
+  const [composerMenuOpen, setComposerMenuOpen] = useState(false);
   const [proposal, setProposal] = useState<ChangeProposal | null>(null);
   const [proposalRequest, setProposalRequest] = useState('');
   const [isProposing, setIsProposing] = useState(false);
   const [agentSession, setAgentSession] = useState<RuntimeSession | null>(null);
+  const [rufloSession, setRufloSession] = useState<RufloClientSession | null>(null);
+  const [rufloProposal, setRufloProposal] = useState<ChangeProposal | null>(null);
+  const [isStartingRuflo, setIsStartingRuflo] = useState(false);
   const [editingId, setEditingId] = useState('');
   const [repository, setRepository] = useState<RepositoryRef | null>(() => {
     try { return JSON.parse(localStorage.getItem('cosmic-repository') ?? 'null') as RepositoryRef | null; } catch { return null; }
@@ -178,6 +237,24 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
      const timer = window.setInterval(() => void poll(), 700);
      return () => { activePoll = false; window.clearInterval(timer); };
    }, [agentSession?.id]);
+
+   useEffect(() => {
+     if (!rufloSession?.id || rufloSession.status !== 'running') return;
+     let activePoll = true;
+     const poll = async () => {
+       try {
+         const latest = await apiJson<RufloClientSession>(`/api/ruflo/sessions/${encodeURIComponent(rufloSession.id)}`);
+          if (activePoll) {
+            setRufloSession(latest);
+            if (latest.proposal) setRufloProposal(latest.proposal);
+          }
+       } catch {
+         // Keep the last safe activity snapshot visible during a transient poll failure.
+       }
+     };
+     const timer = window.setInterval(() => void poll(), 700);
+     return () => { activePoll = false; window.clearInterval(timer); };
+   }, [rufloSession?.id, rufloSession?.status]);
 
   useEffect(() => { localStorage.setItem('cosmic-conversations', JSON.stringify(conversations)); }, [conversations]);
   useEffect(() => { if (repository) localStorage.setItem('cosmic-repository', JSON.stringify(repository)); else localStorage.removeItem('cosmic-repository'); }, [repository]);
@@ -233,11 +310,48 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
     if (active) updateActive((item) => ({ ...item, modelId }));
     setModelOpen(false);
   };
+  const selectComposerMode = (nextMode: ComposerMode) => {
+    setComposerMode(nextMode);
+    setComposerMenuOpen(false);
+    if (nextMode !== 'ruflo') setRufloSession(null);
+    if (nextMode !== 'ruflo') setRufloProposal(null);
+  };
+  const modeLabel = composerMode === 'ruflo' ? 'Ruflo Mode' : composerMode === 'agent' ? 'Normal Agent' : 'Chat';
+  const modeDescription = composerMode === 'ruflo'
+    ? 'Bounded inspection · proposal boundary only'
+    : composerMode === 'agent'
+      ? 'Approval-gated repository changes'
+      : 'Conversation and technical reasoning';
   const handleSend = async (event?: FormEvent) => {
     event?.preventDefault();
     const text = draft.trim();
-    if (!text || isStreaming || !selectedModel) return;
-    if (repository && contextPaths.length && isCodingRequest(text)) {
+    if (!text || isStreaming || isProposing || isStartingRuflo || !selectedModel) return;
+    if (composerMode === 'ruflo') {
+      setDraft('');
+      setRufloProposal(null);
+      setIsStartingRuflo(true);
+      try {
+        const next = await apiJson<RufloClientSession>('/api/ruflo/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task: text,
+            model: selectedModel.id,
+            repository: repository ?? undefined,
+            projectId: 'default',
+            selectedFiles: contextPaths,
+          }),
+        });
+        setRufloSession(next);
+      } catch (error) {
+        notify(error instanceof Error ? error.message : 'Could not start Ruflo Mode.');
+      } finally {
+        setIsStartingRuflo(false);
+      }
+      return;
+    }
+    const useNormalAgent = composerMode === 'agent' || isCodingRequest(text);
+    if (repository && useNormalAgent) {
       setProposalRequest(text);
       setDraft('');
       setIsProposing(true);
@@ -252,7 +366,7 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
       }
       return;
     }
-    if (!repository && isCodingRequest(text)) {
+     if (!repository && useNormalAgent) {
       setProposalRequest(text);
       setDraft('');
       setIsProposing(true);
@@ -329,7 +443,7 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
      <main className="chat-main">
          <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · read-only mode</span></div></div><div className="header-actions">{repository && <button className="context-indicator" onClick={() => setRepositoryOpen(true)}><span className="status-dot" /> {repository.owner}/{repository.name}{contextPaths.length ? ` · ${contextPaths.length} files` : ''}</button>}{previewProposalId && <Link className="preview-toggle" href={`/preview/${encodeURIComponent(previewProposalId)}`}><Eye size={14} /> Preview</Link>}<button className="resource-toggle" onClick={() => setResourceOpen((open) => !open)} aria-label="Toggle resource status"><Activity size={15} /> Resources</button><button className="repo-toggle" onClick={() => setRepositoryOpen((open) => !open)} aria-label="Toggle repository explorer"><GitBranch size={15} /> Repository</button><div className="header-status"><span className="status-dot" /> Ready</div></div></header>
        <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
-            <div className="message-column">{!active?.messages.length && !proposal && !isProposing && !agentSession ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{isProposing && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>Inspecting the workspace and preparing a safe diff preview…</span></div>}{agentSession && <AgentTimeline session={agentSession} model={selectedModel} />}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => { setProposal(null); setAgentSession(null); }} onRegenerate={() => { setProposal(null); setAgentSession(null); setDraft(proposalRequest); }} onApplied={(result) => { recordAppliedEvent(result); setPreviewProposalId(result.proposalId); }} onValidationFailed={(result) => {
+              <div className="message-column">{!active?.messages.length && !proposal && !rufloProposal && !isProposing && !isStartingRuflo && !agentSession && !rufloSession ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{(isProposing || isStartingRuflo) && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>{isStartingRuflo ? 'Starting Ruflo Mode and preparing bounded inspection…' : 'Inspecting the workspace and preparing a safe diff preview…'}</span></div>}{agentSession && <AgentTimeline session={agentSession} model={selectedModel} />}{rufloSession && <RufloActivityPanel session={rufloSession} />}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => { setProposal(null); setAgentSession(null); }} onRegenerate={() => { setProposal(null); setAgentSession(null); setDraft(proposalRequest); }} onApplied={(result) => { recordAppliedEvent(result); setPreviewProposalId(result.proposalId); }} onValidationFailed={(result) => {
               const validation = (result as ChangeExecutionResult & { validation?: { checks?: Array<{ details: string }>; summary?: string } }).validation;
               const details = validation?.checks?.map((check) => check.details).join(' ') || validation?.summary || result.message;
               setProposal(null);
@@ -339,9 +453,9 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
                 '/api/workspace/default/proposal',
                 { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ request: proposalRequest, model: selectedModel.id, paths: contextPaths, previousErrors: [details] }) },
               ).then((next) => { setProposal(next.proposal); setAgentSession(next.session); notify('Validation failed. A new fix proposal is ready for approval.'); }).catch((error) => notify(error instanceof Error ? error.message : 'The fix proposal could not be generated.')).finally(() => setIsProposing(false));
-            }} onCommitted={(result) => recordCommittedEvent(result)} onPushed={(result) => recordPushedEvent(result)} />}</>}</div>
+             }} onCommitted={(result) => recordCommittedEvent(result)} onPushed={(result) => recordPushedEvent(result)} />}{rufloProposal && <ChangeProposalReview key={rufloProposal.proposalId} proposal={rufloProposal} executeEndpoint={rufloSession ? `/api/ruflo/sessions/${encodeURIComponent(rufloSession.id)}/execute` : undefined} gitEndpoints={rufloSession ? { commitReview: `/api/ruflo/sessions/${encodeURIComponent(rufloSession.id)}/git/commit-review`, commit: `/api/ruflo/sessions/${encodeURIComponent(rufloSession.id)}/git/commit`, pushReview: `/api/ruflo/sessions/${encodeURIComponent(rufloSession.id)}/git/push-review`, push: `/api/ruflo/sessions/${encodeURIComponent(rufloSession.id)}/git/push` } : undefined} codeApprovalLabel="Approve code changes" onCancel={() => { setRufloProposal(null); setRufloSession(null); }} onRegenerate={() => { const task = rufloSession?.task ?? ''; setRufloProposal(null); setRufloSession(null); if (task) setDraft(task); }} onWorkflowStart={() => setRufloSession((current) => current ? { ...current, status: 'running', phase: 'reviewing', workflowMessage: 'Reviewer is checking the approved change.' } : current)} onWorkflowResult={(result) => { const workflow = result.workflow; setRufloSession((current) => current ? { ...current, status: workflow.phase === 'completed' ? 'completed' : workflow.phase === 'failed' ? 'failed' : 'waiting', phase: workflow.phase, recoveryAttempts: workflow.recoveryAttempts, maxRecoveryAttempts: workflow.maxRecoveryAttempts, validation: workflow.validation, workflowMessage: workflow.message, proposal: workflow.proposal ?? current.proposal, error: workflow.phase === 'failed' ? { code: 'workflow_failed', message: workflow.message } : undefined } : current); if (workflow.proposal) setRufloProposal(workflow.proposal); if (workflow.phase === 'completed') { setPreviewProposalId(result.proposalId); notify('Ruflo completed after reviewer and validator approval.'); } else if (workflow.phase === 'waiting_approval') notify('Validation failed safely. A bounded fix proposal is waiting for approval.'); else notify(workflow.message); }} />}</>}</div>
       </div>
-       <div className="composer-wrap">{contextPaths.length > 0 && <div className="context-chips" aria-label="Selected repository context">{contextPaths.map((path) => <button key={path} onClick={() => setContextPaths((current) => current.filter((item) => item !== path))}>@{path} <X size={11} /></button>)}</div>}<form className="composer" onSubmit={handleSend}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder={repository ? "Ask about this repository…" : "Ask Cosmic Agent anything…"} rows={1} aria-label="Message Cosmic Agent" /><div className="composer-bottom"><div className="composer-meta"><div className="model-picker"><button type="button" className="model-trigger" onClick={() => setModelOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={modelOpen}><Sparkles size={14} /><span>{selectedModel.displayName}</span><ChevronDown size={14} /></button>{modelOpen && <div className="model-menu" role="listbox">{models.map((model) => <button type="button" role="option" aria-selected={model.id === selectedModel.id} className={model.id === selectedModel.id ? 'selected' : ''} key={model.id} onClick={() => changeModel(model.id)}><span><strong>{model.displayName}</strong><small>{model.provider} · {model.capabilities.join(' · ')}</small></span>{model.id === selectedModel.id && <Check size={15} />}</button>)}</div>}</div><span className="composer-hint">Enter to send · Shift + Enter for newline</span></div>{isStreaming || isProposing ? <button type="button" className="stop-button" onClick={() => { abortRef.current?.abort(); setIsProposing(false); }}><Square size={13} fill="currentColor" /> Stop</button> : <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="Send message"><Send size={16} /></button>}</div></form><p className="composer-disclaimer">Proposal preview mode · approval never writes to the repository.</p></div>
+              <div className="composer-wrap">{contextPaths.length > 0 && <div className="context-chips" aria-label="Selected repository context">{contextPaths.map((path) => <button key={path} onClick={() => setContextPaths((current) => current.filter((item) => item !== path))}>@{path} <X size={11} /></button>)}</div>}<form className="composer" onSubmit={handleSend}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKeyDown} placeholder={composerMode === 'ruflo' ? 'Describe what Ruflo should inspect…' : repository ? "Ask about this repository…" : "Ask Cosmic Agent anything…"} rows={1} aria-label="Message Cosmic Agent" /><div className="composer-bottom"><div className="composer-meta"><ComposerModePicker mode={composerMode} open={composerMenuOpen} onToggle={() => setComposerMenuOpen((open) => !open)} onChange={selectComposerMode} /><div className="model-picker"><button type="button" className="model-trigger" onClick={() => setModelOpen((open) => !open)} aria-haspopup="listbox" aria-expanded={modelOpen}><Sparkles size={14} /><span>{selectedModel.displayName}</span><ChevronDown size={14} /></button>{modelOpen && <div className="model-menu" role="listbox">{models.map((model) => <button type="button" role="option" aria-selected={model.id === selectedModel.id} className={model.id === selectedModel.id ? 'selected' : ''} key={model.id} onClick={() => changeModel(model.id)}><span><strong>{model.displayName}</strong><small>{model.provider} · {model.capabilities.join(' · ')}</small></span>{model.id === selectedModel.id && <Check size={15} />}</button>)}</div>}</div><span className="composer-hint">Enter to send · Shift + Enter for newline</span></div>{isStreaming || isProposing ? <button type="button" className="stop-button" onClick={() => { abortRef.current?.abort(); setIsProposing(false); }}><Square size={13} fill="currentColor" /> Stop</button> : isStartingRuflo ? <button type="button" className="send-button" disabled aria-label="Starting Ruflo"><LoaderCircle className="spin" size={16} /></button> : <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="Send message"><Send size={16} /></button>}</div></form><p className="composer-disclaimer">{modeDescription} · {composerMode === 'ruflo' ? 'Changes require explicit approval.' : 'Approval never writes without your confirmation.'}</p></div>
     </main>
     <RepositoryPanel open={repositoryOpen} repository={repository} onRepositoryChange={(next) => { setRepository(next); if (!next) setContextPaths([]); }} contextPaths={contextPaths} onAddContext={(path) => setContextPaths((current) => current.includes(path) ? current : [...current, path])} onRemoveContext={(path) => setContextPaths((current) => current.filter((item) => item !== path))} onClose={() => setRepositoryOpen(false)} />
      {resourceOpen && <button className="drawer-overlay resource-overlay" onClick={() => setResourceOpen(false)} aria-label="Close resource status" />}
@@ -361,12 +475,6 @@ function SourceUsage({ usage }: { usage?: ContextUsage }) {
   if (!visibleSources.length) return null;
   return <div className="source-usage" data-testid="assistant-source-usage"><div className="source-usage-label"><FileCode2 size={13} /> Sources used <span>{sources.length > visibleSources.length ? `· ${sources.length - visibleSources.length} more` : '· bounded view'}</span></div><div className="source-usage-list">{visibleSources.map((source, index) => <span className="source-usage-item" data-testid={`assistant-source-${index}`} key={`${source.path}-${source.startLine ?? 0}`} title={source.path}>{source.path}{source.startLine ? `:${source.startLine}${source.endLine && source.endLine !== source.startLine ? `–${source.endLine}` : ''}` : ''}</span>)}</div></div>;
 }
-function formatCompactNumber(value: number) {
-  if (value >= 1000000) return `${(value / 1000000).toFixed(1)}m`;
-  if (value >= 1000) return `${Math.round(value / 1000)}k`;
-  return `${value}`;
-}
-
 type ActivityTone = 'active' | 'complete' | 'failed' | 'neutral';
 const activityIconFor = (label: string) => {
   const normalized = label.toLowerCase();
@@ -395,7 +503,13 @@ const activityLabelForTool = (tool: string) => ({
   git_stage_proposed_changes: 'Staging approved files',
   git_commit: 'Creating approved commit',
   git_push: 'Pushing approved commit',
-} as Record<string, string>)[tool] ?? tool.replaceAll('_', ' ');
+ } as Record<string, string>)[tool] ?? 'Working on the project';
+const activityDetailForTrace = (status: string) =>
+  status === 'failed' || status === 'denied' || status === 'timeout'
+    ? 'This step stopped safely and needs attention.'
+    : status === 'completed'
+      ? 'Completed successfully.'
+      : 'In progress.';
 
 function ActivityPanel({ session }: { session: RuntimeSession }) {
   const [expanded, setExpanded] = useState(false);
@@ -411,7 +525,7 @@ function ActivityPanel({ session }: { session: RuntimeSession }) {
   const hasLineStats = Boolean(session.proposalData);
   const activity = [
     ...events.map((event) => ({ id: event.id, label: event.label, detail: event.detail, timestamp: event.timestamp, tone: event.type === 'task_failed' ? 'failed' as ActivityTone : event.type === 'task_completed' || event.type === 'proposal_generated' ? 'complete' as ActivityTone : 'neutral' as ActivityTone })),
-    ...traces.map((trace) => ({ id: trace.toolCallId, label: activityLabelForTool(trace.tool), detail: trace.outputSummary ?? trace.errorCode, timestamp: trace.completedAt ?? trace.startedAt, tone: trace.status === 'failed' || trace.status === 'denied' || trace.status === 'timeout' ? 'failed' as ActivityTone : trace.status === 'completed' ? 'complete' as ActivityTone : 'active' as ActivityTone })),
+     ...traces.map((trace) => ({ id: trace.toolCallId, label: activityLabelForTool(trace.tool), detail: activityDetailForTrace(trace.status), timestamp: trace.completedAt ?? trace.startedAt, tone: trace.status === 'failed' || trace.status === 'denied' || trace.status === 'timeout' ? 'failed' as ActivityTone : trace.status === 'completed' ? 'complete' as ActivityTone : 'active' as ActivityTone })),
   ].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   const visibleActivity = expanded ? activity : activity.slice(-5);
   const counters = [
@@ -438,68 +552,94 @@ function ActivityPanel({ session }: { session: RuntimeSession }) {
   </section>;
 }
 
+function RufloActivityPanel({ session }: { session: RufloClientSession }) {
+  const proposalLabels: Record<RufloClientSession['proposalStatus'], string> = { 'not-created': 'Not created', ready: 'Ready for approval', applied: 'Applied locally', completed: 'Completed' };
+  const validationLabels: Record<RufloClientSession['validationStatus'], string> = { 'not-run': 'Not run', pass: 'Passed', fail: 'Failed safely', 'not-verified': 'Not verified' };
+  const gitLabels: Record<RufloClientSession['git']['status'], string> = { 'not-available': 'Not available', 'not-requested': 'Not requested', ready: 'Ready for review', committed: 'Committed', pushed: 'Pushed', unavailable: 'Unavailable' };
+  const statusLabel = session.currentLabel;
+  const statusTone = session.status === 'failed' ? 'failed' : session.status === 'completed' ? 'complete' : session.phase === 'waiting_approval' ? 'waiting' : 'active';
+  return <section className="ruflo-panel" aria-label="Ruflo activity" data-testid="panel-ruflo-activity">
+    <div className="ruflo-panel-head">
+      <div><span className="agent-panel-kicker"><Activity size={11} /> Ruflo Mode</span><strong>{statusLabel}</strong></div>
+      <span className={`ruflo-status ${statusTone}`}>{statusLabel}</span>
+    </div>
+    <p className="ruflo-task">{session.task}</p>
+    <div className="ruflo-status-grid" aria-label="Ruflo status">
+      <div><span>Current agent</span><strong>{session.currentAgent}</strong></div>
+      <div><span>Current phase</span><strong>{session.currentLabel}</strong></div>
+      <div><span>Files affected</span><strong>{session.affectedFiles.length || '—'}</strong></div>
+      <div><span>Proposal</span><strong>{proposalLabels[session.proposalStatus]}</strong></div>
+      <div><span>Validation</span><strong>{validationLabels[session.validationStatus]}</strong></div>
+      <div><span>Git status</span><strong>{gitLabels[session.git.status]}{session.git.branch ? ` · ${session.git.branch}` : ''}</strong></div>
+    </div>
+    <div className="ruflo-files" aria-label="Affected files">{session.affectedFiles.length ? session.affectedFiles.map((file) => <span key={file}><FileCode2 size={11} />{file}</span>) : <span className="ruflo-files-empty">No affected files identified yet</span>}</div>
+    <div className="ruflo-activity-list">{session.activity.slice(-6).map((item) => <div className={`ruflo-activity-row ${item.status}`} key={item.id}><span className="ruflo-activity-mark">{item.status === 'failed' ? <CircleAlert size={13} /> : item.status === 'complete' ? <CircleCheck size={13} /> : <LoaderCircle size={13} className="spin" />}</span><strong>{item.label}</strong><time>{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>)}</div>
+    {session.plan.length > 0 && <div className="ruflo-plan"><span className="agent-panel-kicker">Plan</span>{session.plan.map((step) => <span key={step}>{step}</span>)}</div>}
+    <div className={`ruflo-note ${statusTone}`}><ShieldCheck size={14} /><span>{session.workflowMessage ?? (session.phase === 'waiting_approval' ? `A code-changing proposal requires explicit approval. Recovery ${session.recoveryAttempts} of ${session.maxRecoveryAttempts}.` : session.phase === 'completed' ? 'Reviewer and validator both passed. Ruflo completed safely.' : session.status === 'failed' ? 'The session stopped safely. No further changes will be attempted.' : 'Ruflo is gathering readable project evidence. Changes remain behind approval.')}</span></div>
+  </section>;
+}
+
 function AgentTimeline({ session, model }: { session: RuntimeSession; model: AiModel }) {
   const completedSteps = session.plan.filter((step) => step.status === 'complete').length;
   const planPercent = session.plan.length ? Math.round((completedSteps / session.plan.length) * 100) : 0;
-  const estimatedTokens = Math.round(session.context.approximateChars / 4);
-  const contextPercent = model.contextWindow ? Math.min(100, Math.round((estimatedTokens / model.contextWindow) * 100)) : 0;
-  const toolNames = Array.from(new Set(session.toolResults.map((result) => result.tool)));
   const hasWarnings = session.context.warnings.length > 0;
   const approvalLabel = session.status === 'waiting_approval' ? 'Approval required' : session.proposal ? 'Proposal ready' : session.status === 'completed' ? 'Approved and complete' : 'No approval requested';
   const statusLabel = session.status === 'waiting_approval' ? 'Waiting for approval' : session.status === 'failed' ? 'Stopped safely' : session.status === 'completed' ? 'Complete' : 'Running';
   const recoveryLabel = session.status === 'failed' ? 'Recovery checkpoint' : session.status === 'waiting_approval' ? 'Paused at approval gate' : session.status === 'completed' ? 'Run closed cleanly' : 'Recovery armed';
   const recoveryDetail = session.status === 'failed'
-    ? 'The runtime stopped without continuing tool calls. Review the last event before retrying.'
+    ? 'The last step stopped safely. Review the activity and retry when ready.'
     : session.status === 'waiting_approval'
-      ? 'No proposal action runs until an explicit approval is chosen below.'
+      ? 'No changes happen until you approve the proposal below.'
       : session.status === 'completed'
-        ? 'All planned runtime work has reported a final state.'
-        : 'The current checkpoint and bounded context are retained if the run needs to stop.';
+        ? 'All planned work has reached a final state.'
+        : 'The current work is continuing safely.';
+  const roleLabel = (role: string) => role === 'frontend' ? 'Frontend work' : role === 'backend' ? 'Backend work' : role === 'reviewer' ? 'Review' : role === 'validator' ? 'Validation' : 'Planning';
 
   return <section className="agent-timeline" aria-label="Agent execution timeline" data-testid="panel-agent-execution">
     <div className="agent-timeline-head">
-      <div><span className="agent-kicker"><Activity size={12} /> Agent runtime</span><strong>{session.task}</strong></div>
+       <div><span className="agent-kicker"><Activity size={12} /> Agent mode</span><strong>{session.task}</strong></div>
       <span className={`agent-status ${session.status}`} data-testid="status-agent-runtime">{statusLabel}</span>
     </div>
 
     <ActivityPanel session={session} />
     <div className="agent-scan-grid" aria-label="Execution summary">
       <div className="agent-scan-card" data-testid="status-agent-step"><span className="agent-scan-label"><Gauge size={12} /> Current step</span><strong>{session.currentStep.replaceAll('_', ' ')}</strong><small>{completedSteps} of {session.plan.length} plan steps complete</small></div>
-      <div className="agent-scan-card" data-testid="status-agent-model"><span className="agent-scan-label"><Bot size={12} /> Selected model</span><strong>{model.displayName}</strong><small>{session.provider} · iteration {session.iteration}/{session.maxIterations}</small></div>
-      <div className="agent-scan-card" data-testid="status-agent-context"><span className="agent-scan-label"><Terminal size={12} /> Context budget</span><strong>~{formatCompactNumber(session.context.approximateChars)} chars</strong><small>{session.context.filesIncluded} files · {contextPercent ? `${contextPercent}% estimated` : 'bounded view'}{session.context.chunked ? ' · chunked' : ''}</small></div>
-      <div className={`agent-scan-card approval-card ${session.status === 'waiting_approval' ? 'needs-approval' : ''}`} data-testid="status-agent-approval"><span className="agent-scan-label"><LockKeyhole size={12} /> Approval status</span><strong>{approvalLabel}</strong><small>{session.proposal ? `${session.proposal.files.length} files in proposal` : 'Read-only runtime boundary'}</small></div>
+       <div className="agent-scan-card" data-testid="status-agent-model"><span className="agent-scan-label"><Bot size={12} /> Selected model</span><strong>{model.displayName}</strong><small>Selected for this request</small></div>
+       <div className="agent-scan-card" data-testid="status-agent-context"><span className="agent-scan-label"><Terminal size={12} /> Project context</span><strong>{session.context.filesIncluded} files inspected</strong><small>{session.context.chunked ? 'Context was safely split into sections' : 'Relevant source was read before planning'}</small></div>
+       <div className={`agent-scan-card approval-card ${session.status === 'waiting_approval' ? 'needs-approval' : ''}`} data-testid="status-agent-approval"><span className="agent-scan-label"><LockKeyhole size={12} /> Approval status</span><strong>{approvalLabel}</strong><small>{session.proposal ? `${session.proposal.files.length} files in proposal` : 'No file changes are being made'}</small></div>
     </div>
 
     <div className="agent-progress-wrap">
-      <div className="agent-progress-caption"><span>Bounded execution plan</span><strong>{planPercent}%</strong></div>
-      <div className="agent-progress" aria-label={`${planPercent}% of execution plan complete`}><span style={{ width: `${planPercent}%` }} /></div>
+       <div className="agent-progress-caption"><span>Execution plan</span><strong>{planPercent}%</strong></div>
+       <div className="agent-progress" aria-label={`${planPercent}% of execution plan complete`}><span style={{ width: `${planPercent}%` }} /></div>
     </div>
 
     <div className="agent-surface-grid">
-      <section className="agent-surface-panel plan-panel" aria-label="Bounded execution plan">
-        <div className="agent-panel-heading"><div><span className="agent-panel-kicker">Plan</span><strong>Guardrails for this run</strong></div><span className="agent-panel-count">{session.plan.length} steps</span></div>
+       <section className="agent-surface-panel plan-panel" aria-label="Execution plan">
+         <div className="agent-panel-heading"><div><span className="agent-panel-kicker">Plan</span><strong>Steps for this request</strong></div><span className="agent-panel-count">{session.plan.length} steps</span></div>
         <div className="agent-plan">{session.plan.map((step, index) => <div className={`agent-step ${step.status}`} key={step.id} data-testid={`row-agent-step-${step.id}`}><span className="agent-step-mark">{step.status === 'complete' ? <CircleCheck size={14} /> : step.status === 'blocked' ? <CircleAlert size={14} /> : index + 1}</span><span>{step.title}</span><em>{step.status}</em></div>)}</div>
       </section>
 
-      <section className="agent-surface-panel tools-panel" aria-label="Approved tool registry and results">
-        <div className="agent-panel-heading"><div><span className="agent-panel-kicker"><ShieldCheck size={11} /> Approved tool registry</span><strong>Read-only tool boundary</strong></div><span className="agent-panel-count">{toolNames.length} registered</span></div>
-        {toolNames.length ? <div className="agent-tool-registry">{toolNames.map((tool) => <span className="agent-tool-badge" key={tool} data-testid={`badge-approved-tool-${tool}`}><Wrench size={11} /> {tool}<b>approved</b></span>)}</div> : <div className="agent-empty-note">No tools have been invoked in this run.</div>}
-        <div className="agent-results-heading"><span>Compact tool results</span><span>{session.toolResults.length} call{session.toolResults.length === 1 ? '' : 's'}</span></div>
-        {session.toolResults.length ? <div className="agent-tool-results">{session.toolResults.map((result, index) => <details className={`agent-tool-result ${result.status}`} key={`${result.tool}-${index}`} data-testid={`details-tool-result-${index}`}><summary><span className="tool-result-status"><span /> {result.status}</span><strong>{result.tool}</strong><small>{result.summary}</small></summary><div className="tool-result-detail"><span>Result detail</span><pre>{result.summary}</pre></div></details>)}</div> : <div className="agent-empty-note">Results will appear here as the runtime observes each tool.</div>}
+      <section className="agent-surface-panel tools-panel" aria-label="Assigned work">
+        <div className="agent-panel-heading"><div><span className="agent-panel-kicker"><ShieldCheck size={11} /> Assigned work</span><strong>People and checks involved</strong></div><span className="agent-panel-count">{session.orchestration.selectedWorkers.length} roles</span></div>
+        <div className="agent-plan">{session.orchestration.selectedWorkers.map((role) => {
+          const completed = role === 'reviewer' ? session.orchestration.reviewStatus === 'completed' : role === 'validator' ? session.orchestration.completedSubtasks.some((id) => id.includes('validator')) : Boolean(session.workerState.completedToolIds[role]?.length);
+          return <div className={`agent-step ${completed ? 'complete' : session.status === 'failed' ? 'blocked' : 'active'}`} key={role}><span className="agent-step-mark">{completed ? <CircleCheck size={14} /> : session.status === 'failed' ? <CircleAlert size={14} /> : <LoaderCircle size={14} className="spin" />}</span><span>{role === 'frontend' ? 'Frontend work' : role === 'backend' ? 'Backend work' : role === 'reviewer' ? 'Review' : role === 'validator' ? 'Validation' : 'Planning'}</span><em>{completed ? 'complete' : session.status === 'failed' ? 'stopped' : 'working'}</em></div>;
+        })}</div>
       </section>
     </div>
 
     <section className={`agent-recovery ${session.status}`} aria-label="Recovery state" data-testid="status-agent-recovery">
       <div className="recovery-icon">{session.status === 'failed' ? <CircleAlert size={15} /> : <ShieldCheck size={15} />}</div>
       <div><span className="agent-panel-kicker">{recoveryLabel}</span><strong>{recoveryDetail}</strong></div>
-      <span className="recovery-iteration">checkpoint {session.iteration}/{session.maxIterations}</span>
+     <span className="recovery-iteration">{session.status === 'failed' ? 'Retry available' : session.status === 'waiting_approval' ? 'Your decision' : 'Safe progress'}</span>
     </section>
 
-    {(hasWarnings || session.context.offloadedResultId) && <details className="agent-context-notes" data-testid="details-agent-context-notes"><summary><span>Context notes</span><span>{session.context.warnings.length} warning{session.context.warnings.length === 1 ? '' : 's'}{session.context.offloadedResultId ? ' · result offloaded' : ''}</span></summary><div>{session.context.warnings.map((warning, index) => <p key={`${warning}-${index}`}>{warning}</p>)}{session.context.offloadedResultId && <p>Long tool output is available through checkpoint {session.context.offloadedResultId}.</p>}</div></details>}
+    {hasWarnings && <details className="agent-context-notes" data-testid="details-agent-context-notes"><summary><span>Context notes</span><span>{session.context.warnings.length} note{session.context.warnings.length === 1 ? '' : 's'}</span></summary><div>{session.context.warnings.map((warning, index) => <p key={`${warning}-${index}`}>{warning}</p>)}</div></details>}
 
     <details className="agent-event-log" data-testid="details-agent-events">
-      <summary><span>Runtime activity</span><span>{session.events.length} event{session.events.length === 1 ? '' : 's'} recorded</span></summary>
-      <div className="agent-events">{session.events.slice(-6).map((event) => <div className="agent-event" key={event.id}><span className="agent-event-time">{new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><div><strong>{event.label}</strong>{event.detail && <small>{event.detail}</small>}</div></div>)}</div>
+      <summary><span>Activity history</span><span>{session.events.length} update{session.events.length === 1 ? '' : 's'}</span></summary>
+      <div className="agent-events">{session.events.slice(-6).map((event) => <div className="agent-event" key={event.id}><span className="agent-event-time">{new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><div><strong>{event.label}</strong>{event.detail && !/calling|runtime|tool|checkpoint|budget|read-only|approved tool/i.test(event.detail) && <small>{event.detail}</small>}</div></div>)}</div>
     </details>
   </section>;
 }
@@ -507,7 +647,10 @@ function MessageBubble({ message, onRetry, onEdit }: { message: ChatMessage; onR
   return <article className={`message ${message.role} ${message.error ? 'error' : ''}`}><div className="message-avatar">{message.role === 'assistant' ? <Aperture size={15} /> : 'AR'}</div><div className="message-content"><div className="message-label"><strong>{message.role === 'assistant' ? 'Cosmic Agent' : 'You'}</strong><span>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>{message.error ? <div className="error-panel"><p>{message.content}</p><button onClick={onRetry}><RefreshCw size={14} /> Retry</button></div> : message.role === 'assistant' ? <><Markdown content={message.content} /><SourceUsage usage={message.repositoryContext} /></> : <p className="user-text">{message.content}</p>}{message.streaming && <span className="generation-cursor" aria-label="Generating response" />}{!message.streaming && <div className="message-actions"><button onClick={() => copyText(message.content)} aria-label="Copy message"><Copy size={13} /> Copy</button>{message.role === 'assistant' ? <><button onClick={onRetry}><RefreshCw size={13} /> Regenerate</button></> : <button onClick={() => onEdit(message.content)}><Pencil size={13} /> Edit</button>}</div>}</div></article>;
 }
 function friendlyError(message: string) { const lower = message.toLowerCase(); if (lower.includes('rate') || lower.includes('limit')) return 'The provider is temporarily busy. Please wait a moment and try again.'; if (lower.includes('unavailable') || lower.includes('configured')) return 'This model is unavailable right now. Try another model from the selector.'; return 'We could not reach the provider. Check your connection and try again.'; }
-function isCodingRequest(text: string) { return /^(fix|add|change|update|remove|refactor|implement|make|improve|replace|rename|create)\b/i.test(text.trim()) || /\b(bug|feature|component|screen|login|patch|edit)\b/i.test(text); }
+function isCodingRequest(text: string) {
+  return /\b(create|add|build|edit|fix|change|update|remove|delete|rename|refactor|implement|modify|replace|improve|debug|configure|set up)\b/i.test(text.trim())
+    || /\b(bug|feature|component|screen|login|patch|file|endpoint|route|api|backend|frontend|ui|configuration|config)\b/i.test(text);
+}
 function PreviewPage() {
   const { proposalId = '' } = useParams<{ proposalId: string }>();
   const [, setLocation] = useLocation();

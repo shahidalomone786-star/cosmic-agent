@@ -6,11 +6,13 @@ import { registerProposal } from "../repository/patch-executor";
 import { fitContext } from "./context-budget";
 import { initializeManager, MAX_TOOL_CALLS, COSMIC_AGENT_CREATOR, type AgentContextMemory, type AgentPlan, type ManagerDecision, type ProviderBudget, type TaskClassification, type ToolCallTrace, type PlanRole } from "./manager-brain";
 import { GroqProviderError } from "./groq-provider";
+export { isCodingRequest } from "./coding-intent";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ValidationResult } from "./validation-runtime";
 import { githubWriteProvider } from "../repository/github-write-provider";
 import { redactGitSensitive } from "../repository/git-security";
+import { resolveProposalPaths } from "./agent-continuation";
 
 export const MAX_AGENT_ITERATIONS = Math.max(1, Math.min(Number(process.env.COSMIC_MAX_AGENT_ITERATIONS ?? 6), 12));
 export const MAX_SESSION_COUNT = 100;
@@ -181,10 +183,17 @@ export function transitionAgentState(session: AgentSession, next: AgentRuntimeSt
   session.updatedAt = now();
 }
 
-export function selectWorkerRoles(classification: TaskClassification): PlanRole[] {
-  if (classification.category === "SIMPLE" || classification.category === "MODERATE") return ["frontend"];
-  if (classification.category === "COMPLEX") return ["backend", "frontend", "reviewer", "validator"];
-  return [];
+export function selectWorkerRoles(classification: TaskClassification, task = ""): PlanRole[] {
+  if (classification.category === "REVIEW_ONLY") return ["reviewer", "validator"];
+  if (classification.category === "CLARIFICATION_REQUIRED") return [];
+  const backendRequested = /\b(backend|server|api|endpoint|route|database|middleware|express|schema)\b/i.test(task);
+  const frontendRequested = /\b(frontend|front-end|ui|ux|component|screen|page|css|style|react|browser)\b/i.test(task);
+  const implementationRoles: PlanRole[] = backendRequested && !frontendRequested
+    ? ["backend"]
+    : backendRequested && frontendRequested
+      ? ["backend", "frontend"]
+      : ["frontend"];
+  return [...implementationRoles, "reviewer", "validator"];
 }
 
 export function reserveProviderBudget(session: AgentSession, estimatedTokens: number): void {
@@ -503,6 +512,112 @@ function compactResult(value: unknown, limit: number): unknown {
   return record;
 }
 
+async function runPreProposalOrchestration(provider: AiProvider, session: AgentSession): Promise<boolean> {
+  if (!session.repository) return true;
+
+  const { executeWorkerTool } = await import("./worker-runtime");
+  const implementationRoles = session.orchestration.selectedWorkers.filter(
+    (role): role is "frontend" | "backend" => role === "frontend" || role === "backend",
+  );
+  const workerPaths = session.selectedFiles.slice(0, 20);
+
+  for (const role of implementationRoles) {
+    const roleLabel = role === "frontend" ? "Frontend worker" : "Backend worker";
+    const subtaskId = session.managerPlan.steps.find((step) => step.assignedRole === role)?.id ?? `${session.id}-${role}`;
+    session.orchestration.activeSubtasks.push(subtaskId);
+    addEvent(session, "planning", `Assigning ${roleLabel}`, "The manager assigned bounded repository work before proposal generation.");
+    try {
+      await executeWorkerTool(provider, session.id, role, "file_context", {
+        repository: session.repository,
+        paths: workerPaths,
+        workerScope: role,
+      });
+      const trace = session.toolTraces.at(-1);
+      session.workerState.assignedTasks[role] = session.task.slice(0, 500);
+      session.workerState.assignedSubtasks[role] = subtaskId;
+      session.workerState.relevantFiles[role] = [...workerPaths];
+      if (trace) session.workerState.findings[role] = [`${roleLabel} completed bounded source inspection.`];
+      session.orchestration.activeSubtasks = session.orchestration.activeSubtasks.filter((id) => id !== subtaskId);
+      session.orchestration.completedSubtasks.push(subtaskId);
+      addEvent(session, "tool_called", `${roleLabel} completed`, "Relevant source context was inspected for the requested change.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : `${roleLabel} could not complete its inspection.`;
+      session.status = "failed";
+      session.currentState = "FAILED";
+      session.recovery = { code: "worker_failure", message: detail, newProposalRequired: false };
+      addEvent(session, "task_failed", `${roleLabel} stopped safely`, "The proposal was not generated and no files were changed.");
+      return false;
+    }
+  }
+
+  transitionAgentState(session, "REVIEWING");
+  addEvent(session, "planning", "Reviewing implementation scope", "The reviewer is checking the worker handoff before proposal generation.");
+  try {
+    await executeWorkerTool(provider, session.id, "reviewer", "file_context", {
+      repository: session.repository,
+      paths: workerPaths,
+      workerScope: "review",
+    });
+    const reviewerTrace = session.toolTraces.at(-1);
+    const { reviewProposal } = await import("./reviewer-runtime");
+    const groundedFindings = reviewerTrace
+      ? [{
+          claim: "The reviewer inspected the bounded repository context.",
+          evidence: reviewerTrace.outputSummary ?? "Completed with bounded output.",
+          sourceToolCallId: reviewerTrace.toolCallId,
+          critical: false,
+        }]
+      : [];
+    const review = reviewProposal({
+      taskId: session.id,
+      proposalFiles: workerPaths,
+      groundedFindings,
+      dependencies: [],
+      conflicts: [],
+      workerReports: [],
+      notes: "Server-side reviewer pass completed before proposal generation.",
+    });
+    session.orchestration.reviewStatus = review.reviewerStatus;
+    session.orchestration.reviewVerdict = review.verdict;
+    if (review.verdict !== "approve") {
+      session.status = "failed";
+      session.currentState = "BLOCKED";
+      session.recovery = { code: "review_blocked", message: review.freeTextNotes ?? "The reviewer requested changes before proposal generation.", newProposalRequired: true };
+      addEvent(session, "task_failed", "Review stopped safely", "The proposal was not generated because the reviewer did not approve the bounded scope.");
+      return false;
+    }
+    addEvent(session, "tool_called", "Review completed", "The requested scope and repository evidence were accepted.");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "The reviewer could not complete its evidence check.";
+    session.status = "failed";
+    session.currentState = "FAILED";
+    session.orchestration.reviewStatus = "failed";
+    session.recovery = { code: "review_failure", message: detail, newProposalRequired: false };
+    addEvent(session, "task_failed", "Review stopped safely", "The proposal was not generated and no files were changed.");
+    return false;
+  }
+
+  addEvent(session, "planning", "Preparing validation handoff", "The validator recorded the files and checks required after approval.");
+  try {
+    await executeWorkerTool(provider, session.id, "validator", "file_context", {
+      repository: session.repository,
+      paths: workerPaths,
+      workerScope: "validation",
+    });
+    const validatorSubtask = session.managerPlan.steps.find((step) => step.assignedRole === "validator")?.id ?? `${session.id}-validator`;
+    session.orchestration.completedSubtasks.push(validatorSubtask);
+    addEvent(session, "tool_called", "Validation handoff ready", "Deterministic checks remain gated until the proposal is approved and applied.");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "The validator could not prepare its handoff.";
+    session.status = "failed";
+    session.currentState = "FAILED";
+    session.recovery = { code: "validator_failure", message: detail, newProposalRequired: false };
+    addEvent(session, "task_failed", "Validation handoff stopped safely", "The proposal was not generated and no files were changed.");
+    return false;
+  }
+  return true;
+}
+
 export async function runAgentSession(provider: AiProvider, input: AgentRunInput): Promise<AgentSession> {
   const task = input.task.trim();
   if (!task) throw new Error("Describe the task you want the agent to plan.");
@@ -559,7 +674,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       retryCounts: {},
     },
     orchestration: {
-      selectedWorkers: selectWorkerRoles(manager.classification),
+      selectedWorkers: selectWorkerRoles(manager.classification, task),
       queuedSubtasks: [],
       activeSubtasks: [],
       completedSubtasks: [],
@@ -575,11 +690,11 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
   addEvent(session, "task_started", "Task started", "Bounded runtime initialized.");
   updateStep(session, "understand", "active");
   transitionAgentState(session, "CLASSIFYING");
-  addEvent(session, "tool_called", "Runtime inspected task", "The task is limited to the approved agent workflow.");
+  addEvent(session, "tool_called", "Planning request", "The request is being handled in Agent Mode.");
   completeStep(session, "understand");
   updateStep(session, "plan", "active");
   transitionAgentState(session, "PLANNING");
-  addEvent(session, "planning", "Plan created", `${MAX_AGENT_ITERATIONS} iteration limit; approval gates remain active.`);
+  addEvent(session, "planning", "Plan created", "Approval remains required before any change.");
   completeStep(session, "plan");
   updateStep(session, "retrieve_context", "active");
   if (manager.classification.category === "COMPLEX") {
@@ -589,12 +704,12 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       : [];
   }
   transitionAgentState(session, "EXECUTING");
-  addEvent(session, "context_retrieval", "Retrieving relevant context", session.selectedFiles.length ? `${session.selectedFiles.length} explicitly selected file(s) prioritized.` : "No explicit files selected.");
+  addEvent(session, "context_retrieval", "Reading relevant project context", session.selectedFiles.length ? `${session.selectedFiles.length} selected file(s) prioritized.` : "The agent is selecting relevant files.");
 
   let context = unavailableContext();
   if (session.repository) {
     try {
-      addEvent(session, "tool_called", "Calling file_context", "Read-only repository context retrieval.");
+      addEvent(session, "tool_called", "Reading project files", "Relevant repository context is being gathered.");
       context = await executeAgentTool(provider, session, "file_context", { repository: session.repository, paths: session.selectedFiles }) as RepositoryContextResult;
       session.toolResults.push({ tool: "file_context", status: "complete", summary: `${context.sources.length} relevant source(s) retrieved.`, output: { sources: context.sources.slice(0, 8).map((source) => source.path), approximateChars: context.approximateChars } });
       session.discoveredFiles = context.sources.map((source) => source.path);
@@ -602,8 +717,22 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       session.contextMemory.completedToolCalls.push(...context.sources.map((source) => `file_context:${source.path}`));
       session.memory.completedTools.push("file_context");
       session.memory.contextNotes.push(...context.warnings);
-    } catch {
-      session.toolResults.push({ tool: "context.retrieve", status: "failed", summary: "Repository retrieval failed safely; no source facts were inferred." });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown repository retrieval failure.";
+      session.toolResults.push({ tool: "file_context", status: "failed", summary: `Repository retrieval failed: ${detail}` });
+      session.memory.contextNotes.push(`Repository retrieval failed: ${detail}`);
+      session.status = "failed";
+      transitionAgentState(session, "FAILED");
+      session.currentStep = "complete";
+      session.plan = session.plan.map((step) =>
+        step.id === "retrieve_context" || step.id === "act" || step.id === "observe" || step.id === "verify" || step.id === "complete"
+          ? { ...step, status: step.id === "complete" ? "complete" : "blocked" }
+          : step,
+      );
+      addEvent(session, "task_failed", "Repository retrieval failed", detail);
+      session.iteration = 1;
+      session.updatedAt = now();
+      return session;
     }
   } else {
     session.toolResults.push({ tool: "file_context", status: "complete", summary: "Skipped repository retrieval because no repository is connected." });
@@ -616,14 +745,31 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
     offloadedResultId: offload(session.id, compactText(context.text, 64_000)),
   };
 
+  if (session.repository && !session.selectedFiles.length) {
+    session.selectedFiles = resolveProposalPaths([], context.sources);
+    session.contextMemory.explicitFiles = [];
+    session.contextMemory.relevantFiles = session.selectedFiles;
+  }
+
   completeStep(session, "retrieve_context");
   updateStep(session, "act", "active");
   if (session.repository && session.selectedFiles.length) {
     try {
-      addEvent(session, "tool_called", "Calling create_proposal", "Proposal-only generation; no repository write is permitted.");
-      transitionAgentState(session, manager.classification.category === "COMPLEX" ? "REVIEWING" : "PROPOSING");
+      if (!(await runPreProposalOrchestration(provider, session))) {
+        session.currentStep = "complete";
+        session.plan = session.plan.map((step) =>
+          step.id === "complete" ? { ...step, status: "complete" } :
+          step.status === "complete" ? step : { ...step, status: "blocked" },
+        );
+        session.iteration = Math.max(1, session.iteration);
+        session.updatedAt = now();
+        return session;
+      }
+      addEvent(session, "tool_called", "Creating proposal", "Proposal-only generation; no repository write is permitted.");
+      transitionAgentState(session, "PROPOSING");
       reserveProviderBudget(session, Math.min(12_000, Math.max(1_000, session.task.length + session.context.approximateChars)));
-       const proposal = await executeAgentTool(provider, session, "create_proposal", { repository: session.repository, paths: session.selectedFiles, request: session.task }) as ChangeProposal;
+      const proposalRole = session.orchestration.selectedWorkers.find((role): role is "frontend" | "backend" => role === "frontend" || role === "backend") ?? "manager";
+      const proposal = await executeAgentTool(provider, session, "create_proposal", { repository: session.repository, paths: session.selectedFiles, request: session.task }, proposalRole) as ChangeProposal;
       registerProposal(proposal, session.repository, provider.id, undefined, session.ownerId, undefined);
       session.proposal = {
         proposalId: proposal.proposalId,
@@ -644,14 +790,36 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       addEvent(session, "proposal_generated", "Safe proposal generated", `${proposal.files.length} file(s), ${proposal.risk.toLowerCase()} risk.`);
       addEvent(session, "approval_requested", "Human approval required", "The proposal must be reviewed before any write or validation operation.");
     } catch (error) {
-      session.status = error instanceof GroqProviderError && ["rate_limited", "timeout", "temporary_failure"].includes(error.code) ? "failed" : "failed";
-      transitionAgentState(session, error instanceof GroqProviderError && ["rate_limited", "timeout", "temporary_failure"].includes(error.code) ? "WAITING_FOR_PROVIDER" : "FAILED");
+      session.status = "failed";
+      if (session.currentState !== "FAILED" && session.currentState !== "BLOCKED" && session.currentState !== "WAITING_FOR_PROVIDER") {
+        transitionAgentState(session, error instanceof GroqProviderError && ["rate_limited", "timeout", "temporary_failure"].includes(error.code) ? "WAITING_FOR_PROVIDER" : "FAILED");
+      }
+      if (session.currentState === "WAITING_FOR_PROVIDER") {
+        session.recovery = { code: error instanceof GroqProviderError ? error.code : "provider_failure", message: error instanceof Error ? error.message : "The provider could not complete the request.", newProposalRequired: false };
+      } else if (!session.recovery) {
+        session.recovery = { code: error instanceof GroqProviderError ? error.code : "proposal_failure", message: error instanceof Error ? error.message : "The proposal could not be generated.", newProposalRequired: false };
+      }
       session.currentStep = "complete";
       session.plan = session.plan.map((step) => step.id === "act" ? { ...step, status: "blocked" } : step);
-      addEvent(session, "task_failed", "Proposal generation failed", error instanceof Error ? error.message : "The proposal could not be generated.");
+      addEvent(session, "task_failed", "Agent stopped safely", "No changes were written. Retry the request after the reported issue is resolved.");
       session.toolResults.push({ tool: "create_proposal", status: "failed", summary: "No changes were written." });
     }
   } else {
+    if (session.repository) {
+      session.status = "failed";
+      transitionAgentState(session, "FAILED");
+      session.currentStep = "complete";
+      session.plan = session.plan.map((step) =>
+        step.id === "retrieve_context" || step.id === "act" || step.id === "observe" || step.id === "verify" || step.id === "complete"
+          ? { ...step, status: step.id === "complete" ? "complete" : "blocked" }
+          : step,
+      );
+      addEvent(session, "task_failed", "No readable files found", "The repository context did not contain a bounded source file for this coding request.");
+      session.toolResults.push({ tool: "create_proposal", status: "failed", summary: "No readable repository files were available for proposal generation." });
+      session.iteration = 1;
+      session.updatedAt = now();
+      return session;
+    }
     session.status = "completed";
     transitionAgentState(session, "COMPLETED");
     session.currentStep = "complete";
@@ -738,7 +906,7 @@ export async function requestAgentTool(
   if (session.iteration >= session.maxIterations) throw new AgentToolError("bounded", "The session iteration limit has been reached.");
   if (!managerTools.has(name)) throw new AgentToolError("permission_denied", `The manager role is not permitted to request ${name}.`);
   session.iteration += 1;
-  addEvent(session, "tool_called", `Tool requested: ${name}`, "Server permission and schema validation applied.");
+  addEvent(session, "tool_called", "Working on project", "The next approved step is in progress.");
   try {
     const result = await executeAgentTool(provider, session, name, input);
     return result;

@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { ChangeProposal } from "../ai/change-proposal";
 import { invalidateRepositoryContext, type RepositoryRef } from "./github-provider";
-import { githubWriteProvider } from "./github-write-provider";
+import { githubWriteProvider, type GitHubWriteProvider } from "./github-write-provider";
 import { assertApproval, type ProposalApproval } from "../ai/approval-gate";
 
 export type ExecutionStatus = "applied" | "validation_failed";
@@ -246,7 +246,7 @@ export async function getCommitReview(proposalId: string): Promise<CommitReviewR
   };
 }
 
-export async function commitProposal(proposalId: string, approvalId: string, message: string): Promise<CommitResult> {
+export async function commitProposal(proposalId: string, approvalId: string, message: string, provider: GitHubWriteProvider = githubWriteProvider): Promise<CommitResult> {
   const review = await getCommitReview(proposalId);
   const session = sessions.get(proposalId);
   if (!session) throw new PatchExecutionError("not_found", "This proposal is no longer available.");
@@ -259,10 +259,10 @@ export async function commitProposal(proposalId: string, approvalId: string, mes
   }
   const cleanMessage = message.trim();
   if (!cleanMessage || cleanMessage.length > 200) throw new PatchExecutionError("invalid_proposal", "Enter a commit message between 1 and 200 characters.");
-  const state = await githubWriteProvider.getRepositoryState(review.repository, review.branch);
-  const comparison = await githubWriteProvider.compareBranch(review.repository, review.branch, state.headSha);
+  const state = await provider.getRepositoryState(review.repository, review.branch);
+  const comparison = await provider.compareBranch(review.repository, review.branch, state.headSha);
   if (!comparison.unchanged) throw new PatchExecutionError("validation_failed", "Remote branch changed. Commit was cancelled to protect existing work.");
-  const committed = await githubWriteProvider.createCommit({
+  const committed = await provider.createCommit({
     repository: review.repository,
     branch: review.branch,
     expectedHeadSha: state.headSha,
@@ -290,7 +290,7 @@ export function getPushReview(proposalId: string): PushReviewResult {
   };
 }
 
-export async function pushProposal(proposalId: string, approvalId: string): Promise<PushResult> {
+export async function pushProposal(proposalId: string, approvalId: string, provider: GitHubWriteProvider = githubWriteProvider): Promise<PushResult> {
   const review = getPushReview(proposalId);
   const session = sessions.get(proposalId);
   if (!session?.commit) throw new PatchExecutionError("invalid_proposal", "A successful commit approval is required before push.");
@@ -302,9 +302,9 @@ export async function pushProposal(proposalId: string, approvalId: string): Prom
   }
   const expectedHeadSha = session.commitBaseSha;
   if (!expectedHeadSha) throw new PatchExecutionError("invalid_proposal", "The approved commit state is incomplete. Push was cancelled.");
-  const comparison = await githubWriteProvider.compareBranch(review.repository, review.branch, expectedHeadSha);
+  const comparison = await provider.compareBranch(review.repository, review.branch, expectedHeadSha);
   if (!comparison.unchanged) throw new PatchExecutionError("validation_failed", "Remote branch changed. Push was cancelled to protect existing work.");
-  const pushed = await githubWriteProvider.pushBranch(review.repository, review.branch, expectedHeadSha, session.commit.commitSha);
+  const pushed = await provider.pushBranch(review.repository, review.branch, expectedHeadSha, session.commit.commitSha);
   invalidateRepositoryContext(review.repository);
   return { status: "pushed", ...pushed, proposalId };
 }

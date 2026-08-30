@@ -5,6 +5,7 @@ import {
   executeChangeProposal,
   getChangeProposalCommitReview,
   getChangeProposalPushReview,
+  postAiChangeProposalApprove,
   pushChangeProposal,
   undoChangeProposal,
   type ChangeExecutionResult,
@@ -20,6 +21,44 @@ type ValidationResult = {
   summary: string;
   toolCallIds: string[];
 };
+type RufloWorkflowResult = {
+  status: "completed" | "waiting_approval" | "failed";
+  phase: "completed" | "waiting_approval" | "failed";
+  recoveryAttempts: number;
+  maxRecoveryAttempts: number;
+  approvalRequired: boolean;
+  approvalRisk?: string;
+  proposal?: ChangeProposal;
+  validation?: ValidationResult;
+  message: string;
+};
+type RufloExecutionResult = ChangeExecutionResult & { workflow: RufloWorkflowResult };
+type RufloGitEndpoints = {
+  commitReview: string;
+  commit: string;
+  pushReview: string;
+  push: string;
+};
+type RufloGitPermission = {
+  canPush: boolean;
+  permission: "admin" | "push" | "pull" | "none";
+  headSha: string;
+};
+type RufloGitCommitReview = CommitReview & {
+  permission?: RufloGitPermission;
+};
+type RufloGitPushReview = PushReview & {
+  permission?: {
+    canPush: boolean;
+    permission: "admin" | "push" | "pull" | "none";
+    headSha: string;
+  };
+};
+type RufloGitPushResult = PushResult & { verified: true; remoteHeadSha: string };
+
+function isRufloExecutionResult(value: ChangeExecutionResult | RufloExecutionResult): value is RufloExecutionResult {
+  return Boolean(value && typeof value === "object" && "workflow" in value && value.workflow && typeof value.workflow === "object");
+}
 
 function copyText(text: string) {
   void navigator.clipboard?.writeText(text);
@@ -34,24 +73,48 @@ function getApiErrorCode(cause: unknown): string {
   return cause instanceof Error ? cause.message : "";
 }
 
+async function requestJson<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => null) as { error?: string } | T | null;
+  if (!response.ok) {
+    throw new Error(data && typeof data === "object" && "error" in data && typeof data.error === "string" ? data.error : "The protected GitHub operation stopped safely.");
+  }
+  return data as T;
+}
+
 export function ChangeProposalReview({
   proposal,
   onCancel,
   onRegenerate,
   onApplied,
   onValidationFailed,
+  executeEndpoint,
+  onWorkflowStart,
+  onWorkflowResult,
   onCommitted,
   onPushed,
+  gitEndpoints,
+  codeApprovalLabel = "Approve & Apply",
 }: {
   proposal: ChangeProposal;
   onCancel: () => void;
   onRegenerate: () => void;
-  onApplied: (result: ChangeExecutionResult) => void;
+  onApplied?: (result: ChangeExecutionResult) => void;
   onValidationFailed?: (result: ChangeExecutionResult) => void;
+  executeEndpoint?: string;
+  onWorkflowStart?: () => void;
+  onWorkflowResult?: (result: RufloExecutionResult) => void;
   onCommitted?: (result: CommitResult) => void;
   onPushed?: (result: PushResult) => void;
+  gitEndpoints?: RufloGitEndpoints;
+  codeApprovalLabel?: string;
 }) {
-  const [execution, setExecution] = useState<ChangeExecutionResult | null>(null);
+  const [execution, setExecution] = useState<ChangeExecutionResult | RufloExecutionResult | null>(null);
   const [commitReview, setCommitReview] = useState<CommitReview | null>(null);
   const [commit, setCommit] = useState<CommitResult | null>(null);
   const [pushReview, setPushReview] = useState<PushReview | null>(null);
@@ -60,6 +123,7 @@ export function ChangeProposalReview({
   const [busy, setBusy] = useState(false);
   const [applyApprovalId, setApplyApprovalId] = useState("");
   const [error, setError] = useState("");
+  const [gitReviewError, setGitReviewError] = useState("");
   const [openFiles, setOpenFiles] = useState<string[]>(proposal.files[0] ? [proposal.files[0].path] : []);
   const toggleFile = (path: string) => setOpenFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path]);
   const riskClass = proposal.risk.toLowerCase();
@@ -68,27 +132,44 @@ export function ChangeProposalReview({
   const deletedFiles = proposal.files.filter((file) => file.operation === "delete");
   const renamedFiles = proposal.files.filter((file) => file.operation === "rename");
   const createdDirectories = proposal.files.filter((file) => file.operation === "directory_create");
+  const rufloExecution = execution && isRufloExecutionResult(execution) ? execution : null;
   const approve = async () => {
     setBusy(true); setError("");
     try {
-      const userId = localStorage.getItem("cosmic-user-id") ?? crypto.randomUUID();
-      localStorage.setItem("cosmic-user-id", userId);
-      const approvalResponse = await fetch("/api/ai/change-proposal/approve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-cosmic-user-id": userId },
-        body: JSON.stringify({ proposalId: proposal.proposalId }),
-      });
-      if (!approvalResponse.ok) {
-        const body = await approvalResponse.json().catch(() => ({}));
-        throw new Error(body.error || "User approval could not be recorded.");
-      }
-      const approval = await approvalResponse.json() as { approvalId?: string };
+      const approval = await postAiChangeProposalApprove({ proposalId: proposal.proposalId });
       if (!approval.approvalId) throw new Error("The server did not return an approval authorization.");
       setApplyApprovalId(approval.approvalId);
-      const result = await executeChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId } as Parameters<typeof executeChangeProposal>[0]);
+      if (executeEndpoint) onWorkflowStart?.();
+      const result = executeEndpoint
+        ? await (async () => {
+            const response = await fetch(executeEndpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ proposalId: proposal.proposalId, approvalId: approval.approvalId }),
+            });
+            const data = await response.json() as RufloExecutionResult & { error?: string };
+            if (!response.ok) throw new Error(data.error || "Ruflo execution stopped safely.");
+            return data;
+          })()
+        : await executeChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId });
       setExecution(result);
+      if (isRufloExecutionResult(result)) {
+        if (result.workflow.phase === "completed" && gitEndpoints) {
+          try {
+            const review = await requestJson<RufloGitCommitReview>(gitEndpoints.commitReview, { proposalId: proposal.proposalId });
+            setCommitReview(review);
+            setGitReviewError("");
+            setPhase("commit_review");
+          } catch (cause) {
+            setGitReviewError(cause instanceof Error ? cause.message : "GitHub commit review stopped safely.");
+            setPhase("provider_not_configured");
+          }
+        }
+        onWorkflowResult?.(result);
+        return;
+      }
       if (result.status === "applied") {
-        onApplied(result);
+        onApplied?.(result);
         try {
           const review = await getChangeProposalCommitReview({ proposalId: proposal.proposalId });
           setCommitReview(review);
@@ -113,10 +194,14 @@ export function ChangeProposalReview({
       });
       const approval = await approvalResponse.json() as { approvalId?: string; error?: string };
       if (!approvalResponse.ok || !approval.approvalId) throw new Error(approval.error || "Commit approval could not be recorded.");
-      const result = await commitChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId, applyApprovalId, message: commitMessage } as Parameters<typeof commitChangeProposal>[0]);
+      const result = gitEndpoints
+        ? await requestJson<CommitResult>(gitEndpoints.commit, { proposalId: proposal.proposalId, approvalId: approval.approvalId, applyApprovalId, message: commitMessage })
+        : await commitChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId, applyApprovalId, message: commitMessage } as Parameters<typeof commitChangeProposal>[0]);
       setCommit(result);
       onCommitted?.(result);
-      setPushReview(await getChangeProposalPushReview({ proposalId: proposal.proposalId }));
+      setPushReview(gitEndpoints
+        ? await requestJson<RufloGitPushReview>(gitEndpoints.pushReview, { proposalId: proposal.proposalId })
+        : await getChangeProposalPushReview({ proposalId: proposal.proposalId }));
       setPhase("push_review");
     } catch (cause) {
       const message = getApiErrorCode(cause) || "Commit was cancelled safely.";
@@ -134,7 +219,9 @@ export function ChangeProposalReview({
       });
       const approval = await approvalResponse.json() as { approvalId?: string; error?: string };
       if (!approvalResponse.ok || !approval.approvalId) throw new Error(approval.error || "Push approval could not be recorded.");
-      const result = await pushChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId } as Parameters<typeof pushChangeProposal>[0]);
+      const result = gitEndpoints
+        ? await requestJson<RufloGitPushResult>(gitEndpoints.push, { proposalId: proposal.proposalId, approvalId: approval.approvalId })
+        : await pushChangeProposal({ proposalId: proposal.proposalId, approvalId: approval.approvalId } as Parameters<typeof pushChangeProposal>[0]);
       setPhase("success");
       setPushReview((current) => current ? { ...current, commitSha: result.commitSha, shortSha: result.shortSha } : current);
       onPushed?.(result);
@@ -170,7 +257,7 @@ export function ChangeProposalReview({
        <span><strong>Deleted</strong>{deletedFiles.length}</span>
        <span><strong>Renamed</strong>{renamedFiles.length}</span>
        <span><strong>Directories</strong>{createdDirectories.length}</span>
-      <span className="audit-validation"><strong>Validation</strong>{execution ? execution.status === "applied" ? "Passed" : "Failed" : "Pending approval"}</span>
+      <span className="audit-validation"><strong>Validation</strong>{execution && "workflow" in execution ? execution.workflow.phase.replace("_", " ") : execution ? execution.status === "applied" ? "Passed" : "Failed" : "Pending approval"}</span>
       <span className="audit-security"><strong>Security</strong>Server checks passed</span>
     </div>
     <div className="proposal-files">
@@ -195,12 +282,19 @@ export function ChangeProposalReview({
         </div>;
       })}
     </div>
-    {busy && <div className="execution-progress" role="status"><strong>Applying Changes</strong><span className="done"><Check size={12} /> Validating proposal</span><span className="done"><Check size={12} /> Checking file versions</span><span className="active"><RotateCw size={12} /> Applying patch</span><span><ChevronRight size={12} /> Running typecheck</span><span><ChevronRight size={12} /> Running build</span></div>}
-    {execution?.status === "applied" && <div className="execution-success" role="status"><strong>Changes Applied Successfully</strong><span>{execution.message}</span><small>{execution.files.length} files modified · +{execution.addedLines} / −{execution.removedLines} lines · Typecheck: {execution.typecheck} · Build: {execution.build}</small>{(execution as ChangeExecutionResult & { validation?: ValidationResult }).validation && <ValidationSummary validation={(execution as ChangeExecutionResult & { validation: ValidationResult }).validation} />}</div>}
+    {busy && <div className="execution-progress" role="status"><strong>{executeEndpoint ? "Ruflo workflow" : "Applying Changes"}</strong><span className="done"><Check size={12} /> Approval verified</span><span className="active"><RotateCw size={12} /> {executeEndpoint ? "Reviewing and validating" : "Applying patch"}</span><span><ChevronRight size={12} /> Running supported checks</span></div>}
+    {rufloExecution?.workflow.phase === "waiting_approval" && <div className="execution-progress" role="status"><strong>Fix proposal ready</strong><span className="done"><Check size={12} /> Applied change rolled back</span><span className="active"><RotateCw size={12} /> Waiting for approval</span><small>{rufloExecution.workflow.message}</small></div>}
+    {rufloExecution?.workflow.phase === "completed" && <div className="execution-success" role="status"><strong>Completed</strong><span>{rufloExecution.workflow.message}</span>{rufloExecution.workflow.validation && <ValidationSummary validation={rufloExecution.workflow.validation} />}</div>}
+    {rufloExecution?.workflow.phase === "failed" && <div className="execution-failure" role="alert"><strong>Failed</strong><span>{rufloExecution.workflow.message}</span>{rufloExecution.workflow.validation && <ValidationSummary validation={rufloExecution.workflow.validation} />}</div>}
+    {execution?.status === "applied" && !rufloExecution && <div className="execution-success" role="status"><strong>Changes Applied Successfully</strong><span>{execution.message}</span><small>{execution.files.length} files modified · +{execution.addedLines} / −{execution.removedLines} lines · Typecheck: {execution.typecheck} · Build: {execution.build}</small>{(execution as ChangeExecutionResult & { validation?: ValidationResult }).validation && <ValidationSummary validation={(execution as ChangeExecutionResult & { validation: ValidationResult }).validation} />}</div>}
     {execution?.status === "validation_failed" && <div className="execution-failure" role="alert"><strong>Validation failed safely</strong><span>{execution.message}</span><small>Affected files: {execution.files.join(", ")}</small>{(execution as ChangeExecutionResult & { validation?: ValidationResult }).validation && <ValidationSummary validation={(execution as ChangeExecutionResult & { validation: ValidationResult }).validation} />}</div>}
+    {gitReviewError && <section className="github-review" aria-label="GitHub operation status">
+      <div className="github-review-heading"><div><div className="proposal-kicker"><ShieldCheck size={13} /> GitHub operation</div><h4>Stopped safely</h4><p>No commit or push was reported as successful.</p></div><span className="github-state">Authorization required</span></div>
+      <div className="execution-failure" role="alert"><strong>GitHub authorization/configuration is required</strong><span>{gitReviewError}</span><small>Reconnect or update GitHub authorization in Settings, then start a fresh Ruflo Git review.</small></div>
+    </section>}
     {commitReview && <section className="github-review" aria-label="Commit review">
        <div className="github-review-heading"><div><div className="proposal-kicker"><ShieldCheck size={13} /> Commit review</div><h4>{phase === "provider_not_configured" ? "Provider Not Configured" : phase === "push_review" || phase === "no_push" || phase === "success" ? "Commit approved" : "Ready to Commit"}</h4><p>{commitReview.repository.owner}/{commitReview.repository.name} · {commitReview.branch}</p></div><span className="github-state">{phase === "commit_processing" ? "Commit Approval" : phase === "push_processing" ? "Push Approval" : phase === "success" ? "Push complete" : phase === "conflict" ? "Safely stopped" : phase === "provider_not_configured" ? "Writes disabled" : phase === "push_review" ? "Push review" : phase === "no_push" ? "Push declined" : "Awaiting approval"}</span></div>
-      <div className="github-review-stats"><span><strong>{commitReview.files.length}</strong> files</span><span className="added-stat">+{commitReview.addedLines}</span><span className="removed-stat">−{commitReview.removedLines}</span><span>Validation: {commitReview.validation}</span></div>
+       <div className="github-review-stats"><span><strong>{commitReview.files.length}</strong> files</span><span className="added-stat">+{commitReview.addedLines}</span><span className="removed-stat">−{commitReview.removedLines}</span><span>Validation: {commitReview.validation}</span>{(commitReview as RufloGitCommitReview).permission && <span>GitHub permission: verified</span>}</div>
       <p className="github-diff-summary">{commitReview.diffSummary}</p>
       <div className="github-file-list">{commitReview.files.map((file) => <span key={file}>{file}</span>)}</div>
        {phase === "commit_review" || phase === "commit_processing" ? <><div className="approval-notice"><strong>Explicit commit approval required</strong><span>Review the validated files and message. The approval request sends only the server-held proposal ID and message.</span></div><label className="commit-message-label">Commit message<input value={commitMessage} onChange={(event) => setCommitMessage(event.target.value)} maxLength={200} disabled={busy} /></label><div className="github-actions"><button className="proposal-cancel" onClick={() => setPhase("idle")} disabled={busy}>Cancel commit</button><button className="proposal-approve" onClick={() => void commitChanges()} disabled={busy || !commitMessage.trim()}><Check size={14} /> {busy ? "Requesting commit…" : "Approve commit"}</button></div></> : null}
@@ -211,11 +305,11 @@ export function ChangeProposalReview({
       {phase === "conflict" && <div className="execution-failure" role="alert"><strong>Remote branch changed. Push was cancelled to protect existing work.</strong><span>{error}</span></div>}
     </section>}
     {error && <div className="execution-failure" role="alert"><strong>Execution stopped safely</strong><span>{error}</span></div>}
-    {!execution && !busy && <div className="proposal-safety"><ShieldCheck size={15} /><span>Nothing has been written. Approval sends only this server-held proposal ID for validation and execution.</span></div>}
+    {!execution && !busy && <div className="proposal-safety"><ShieldCheck size={15} /><span>Nothing has been written. {executeEndpoint ? "Code approval is separate from GitHub commit and push approval." : "Approval sends only this server-held proposal ID for validation and execution."}</span></div>}
     <div className="proposal-actions">
       {execution?.status === "applied" && execution.canUndo && <button className="proposal-undo" onClick={undo} disabled={busy}><RotateCw size={14} /> Undo changes</button>}
       <button className="proposal-cancel" onClick={onCancel} disabled={busy}><X size={14} /> {execution?.status === "applied" ? "Continue chat" : "Reject"}</button>
-      {!execution && <><button className="proposal-regenerate" onClick={onRegenerate} disabled={busy}><RotateCw size={14} /> Regenerate</button><button className="proposal-approve" onClick={() => void approve()} disabled={busy}><Check size={14} /> {busy ? "Applying…" : "Approve & Apply"}</button></>}
+      {!execution && <><button className="proposal-regenerate" onClick={onRegenerate} disabled={busy}><RotateCw size={14} /> Regenerate</button><button className="proposal-approve" onClick={() => void approve()} disabled={busy}><Check size={14} /> {busy ? "Applying…" : codeApprovalLabel}</button></>}
     </div>
   </section>;
 }

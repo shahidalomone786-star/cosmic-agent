@@ -1,7 +1,17 @@
 import type { RepositoryRef } from "./github-provider";
 import { getCurrentAuthUser } from "../middlewares/auth-middleware";
-import { getGitHubCredential } from "../lib/github-credentials";
+import { getGitHubCredential, updateGitHubCredentialStatus } from "../lib/github-credentials";
 import { assertSafePush, assertSafeRepositoryPath, redactGitSensitive } from "./git-security";
+import {
+  assertRemoteHeadMatches,
+  classifyGitHubWriteFailure,
+  GitHubWriteProviderError,
+  resolveRepositoryWritePermission,
+  type RepositoryWritePermission,
+} from "./github-write-policy";
+export { GitHubWriteProviderError } from "./github-write-policy";
+export { assertRemoteHeadMatches } from "./github-write-policy";
+export type { RepositoryWritePermission } from "./github-write-policy";
 
 export type WriteRepositoryState = {
   repository: RepositoryRef;
@@ -54,19 +64,11 @@ export type BranchComparison = {
   actualHeadSha: string;
 };
 
-export class GitHubWriteProviderError extends Error {
-  constructor(
-    readonly code: "provider_not_configured" | "conflict" | "protected_file" | "invalid_state",
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
 export interface GitHubWriteProvider {
   getStatus(repository: RepositoryRef, branch: string, stagedFiles?: string[]): Promise<GitStatus>;
   getDiff(repository: RepositoryRef, branch: string, baseSha?: string): Promise<GitDiff>;
   getRepositoryState(repository: RepositoryRef, branch: string): Promise<WriteRepositoryState>;
+  checkRepositoryPermission(repository: RepositoryRef, branch: string): Promise<RepositoryWritePermission>;
   compareBranch(repository: RepositoryRef, branch: string, expectedHeadSha: string): Promise<BranchComparison>;
   createCommit(input: CreateCommitInput): Promise<CommitResult>;
   pushBranch(repository: RepositoryRef, branch: string, expectedHeadSha: string, commitSha: string): Promise<PushResult>;
@@ -84,6 +86,10 @@ class NotConfiguredGitHubWriteProvider implements GitHubWriteProvider {
   }
 
   getRepositoryState(_repository: RepositoryRef, _branch: string): Promise<WriteRepositoryState> {
+    return Promise.reject(this.unavailable());
+  }
+
+  checkRepositoryPermission(_repository: RepositoryRef, _branch: string): Promise<RepositoryWritePermission> {
     return Promise.reject(this.unavailable());
   }
 
@@ -107,10 +113,10 @@ class NotConfiguredGitHubWriteProvider implements GitHubWriteProvider {
 class GitHubApiWriteProvider implements GitHubWriteProvider {
   private async request<T>(repository: RepositoryRef, method: string, route: string, body?: unknown): Promise<T> {
     const user = getCurrentAuthUser();
-    if (!user) throw new GitHubWriteProviderError("provider_not_configured", "An authenticated user is required for GitHub writes.");
+    if (!user) throw new GitHubWriteProviderError("provider_not_configured", "GitHub authorization/configuration is required for protected Git operations.");
     const credential = await getGitHubCredential(user.id);
     if (!credential?.token || credential.status !== "connected") {
-      throw new GitHubWriteProviderError("provider_not_configured", "A connected GitHub credential is required for GitHub writes.");
+      throw new GitHubWriteProviderError("provider_not_configured", "GitHub authorization/configuration is required for protected Git operations.");
     }
     const response = await fetch(`https://api.github.com${route}`, {
       method,
@@ -122,12 +128,18 @@ class GitHubApiWriteProvider implements GitHubWriteProvider {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    const raw = redactGitSensitive(await response.text());
+    const raw = redactGitSensitive(await response.text(), [credential.token]);
     let parsed: unknown = undefined;
     try { parsed = raw ? JSON.parse(raw) : undefined; } catch { /* handled below */ }
     if (!response.ok) {
-      if (response.status === 409 || response.status === 422) throw new GitHubWriteProviderError("conflict", "GitHub rejected the protected write.");
-      throw new GitHubWriteProviderError("provider_not_configured", "GitHub rejected the authenticated write.");
+      const message = typeof parsed === "object" && parsed && "message" in parsed && typeof parsed.message === "string"
+        ? redactGitSensitive(parsed.message)
+        : "GitHub rejected the protected request.";
+      const failure = classifyGitHubWriteFailure(response.status, message, response.headers.get("x-ratelimit-remaining"));
+      if (failure.code === "invalid_credential") {
+        await updateGitHubCredentialStatus(user.id, "invalid", false).catch(() => undefined);
+      }
+      throw failure;
     }
     return parsed as T;
   }
@@ -136,6 +148,15 @@ class GitHubApiWriteProvider implements GitHubWriteProvider {
     validateBranch(branch);
     const ref = await this.request<{ object: { sha: string } }>(repository, "GET", `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/git/ref/heads/${encodeURIComponent(branch)}`);
     return { repository, branch, headSha: ref.object.sha };
+  }
+
+  async checkRepositoryPermission(repository: RepositoryRef, branch: string): Promise<RepositoryWritePermission> {
+    validateBranch(branch);
+    const metadata = await this.request<{
+      permissions?: { admin?: boolean; push?: boolean; pull?: boolean };
+    }>(repository, "GET", `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`);
+    const state = await this.getRepositoryState(repository, branch);
+    return resolveRepositoryWritePermission(repository, branch, state.headSha, metadata.permissions);
   }
 
   async compareBranch(repository: RepositoryRef, branch: string, expectedHeadSha: string): Promise<BranchComparison> {

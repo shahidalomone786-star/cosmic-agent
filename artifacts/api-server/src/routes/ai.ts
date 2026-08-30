@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Response } from "express";
-import { AgentToolError, beginProposalValidation, getAgentSession, getAgentSessionForProposal, getAgentToolDefinitions, requestAgentTool, recordAgentValidation, recordServerToolTrace, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
+import { AgentToolError, beginProposalValidation, getAgentSession, getAgentSessionForProposal, getAgentToolDefinitions, isCodingRequest, requestAgentTool, recordAgentValidation, recordServerToolTrace, runAgentSession, type AgentRunInput } from "../ai/agent-runtime";
 import {
   SendAiMessageBody,
   SendAiMessageResponse,
@@ -364,6 +364,22 @@ router.post("/ai/chat", async (req, res) => {
 
   try {
     const provider = providerManager.getProviderForModel(parsed.data.model);
+    const codingTask = [...parsed.data.messages].reverse().find((message) => message.role === "user")?.content ?? "";
+    if (isCodingRequest(codingTask)) {
+      if (!parsed.data.repositoryContext) {
+        res.status(409).json({ error: "Coding requests must enter Agent Mode with a connected repository.", code: "agent_required" });
+        return;
+      }
+      const session = await runAgentSession(provider, {
+        task: codingTask,
+        model: parsed.data.model,
+        repository: parsed.data.repositoryContext.repository,
+        paths: parsed.data.repositoryContext.paths,
+        ownerId: req.authUser?.id,
+      });
+      res.status(201).json({ mode: "agent", session });
+      return;
+    }
     let prepared = await withRepositoryContext(parsed.data);
     let result;
     try {
@@ -394,6 +410,23 @@ router.post("/ai/chat/stream", async (req, res) => {
 
   try {
     const provider = providerManager.getProviderForModel(parsed.data.model);
+    const codingTask = [...parsed.data.messages].reverse().find((message) => message.role === "user")?.content ?? "";
+    if (isCodingRequest(codingTask)) {
+      if (!parsed.data.repositoryContext) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: "Coding requests must enter Agent Mode with a connected repository.", code: "agent_required" })}\n\n`);
+        return;
+      }
+      const session = await runAgentSession(provider, {
+        task: codingTask,
+        model: parsed.data.model,
+        repository: parsed.data.repositoryContext.repository,
+        paths: parsed.data.repositoryContext.paths,
+        ownerId: req.authUser?.id,
+      });
+      res.write(`data: ${JSON.stringify({ agentMode: true, session })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      return;
+    }
     let prepared = await withRepositoryContext(parsed.data);
     let result;
     const emitToken = (token: string) => {

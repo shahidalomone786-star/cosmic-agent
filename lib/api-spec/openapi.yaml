@@ -14,6 +14,8 @@ tags:
     description: Provider-backed AI operations
   - name: agent
     description: Bounded, approval-gated agent runtime
+  - name: ruflo
+    description: Bounded Ruflo workflow and protected Git operations
 paths:
   /healthz:
     get:
@@ -455,6 +457,112 @@ paths:
           description: Remote branch changed
         "503":
           description: GITHUB_PROVIDER_NOT_CONFIGURED
+  /ruflo/sessions/{sessionId}/git/commit-review:
+    post:
+      operationId: getRufloGitCommitReview
+      tags: [ruflo]
+      summary: Review validated Ruflo changes before commit approval
+      description: Performs a non-destructive GitHub permission and branch check, then returns the final validated diff summary. No commit or push occurs.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProposalActionInput" }
+      responses:
+        "200":
+          description: Ruflo commit review and verified repository permission
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RufloGitCommitReview" }
+        "400": { description: Invalid Ruflo proposal }
+        "403": { description: Connected GitHub account cannot push to the repository }
+        "404": { description: Ruflo session not found }
+        "503": { description: GitHub authorization/configuration or service failure }
+  /ruflo/sessions/{sessionId}/git/commit:
+    post:
+      operationId: commitRufloChanges
+      tags: [ruflo]
+      summary: Create a Ruflo commit after explicit Git approval
+      description: Requires the exact approved code proposal, apply approval, and separate commit approval. Creates a commit object only; the branch is not updated.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CommitChangeProposalInput" }
+      responses:
+        "200":
+          description: Commit object created without updating the branch
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommitResult" }
+        "400": { description: "Invalid proposal, approval, or commit message" }
+        "403": { description: Protected file or permission rejection }
+        "409": { description: Repository or branch conflict }
+        "404": { description: Ruflo session not found }
+        "503": { description: "GitHub authorization/configuration or service failure" }
+  /ruflo/sessions/{sessionId}/git/push-review:
+    post:
+      operationId: getRufloGitPushReview
+      tags: [ruflo]
+      summary: Review a Ruflo commit before push approval
+      description: Rechecks repository permission and returns the server-held commit. No push occurs.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProposalActionInput" }
+      responses:
+        "200":
+          description: Ruflo push review
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RufloGitPushReview" }
+        "400": { description: No approved Ruflo commit exists }
+        "403": { description: Connected GitHub account cannot push to the repository }
+        "404": { description: Ruflo session not found }
+        "503": { description: GitHub authorization/configuration or service failure }
+  /ruflo/sessions/{sessionId}/git/push:
+    post:
+      operationId: pushRufloChanges
+      tags: [ruflo]
+      summary: Push a Ruflo commit after explicit push approval
+      description: Requires separate push approval, performs a fast-forward-only branch update, and verifies the remote branch points to the approved commit. Never force-pushes or retries automatically.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProposalActionInput" }
+      responses:
+        "200":
+          description: Verified remote push result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RufloGitPushResult" }
+        "400": { description: Invalid proposal or approval }
+        "403": { description: Protected branch or permission rejection }
+        "409": { description: Remote branch changed }
+        "404": { description: Ruflo session not found }
+        "503": { description: "GitHub authorization/configuration, verification, or service failure" }
   /repository/connect:
     post:
       operationId: connectRepository
@@ -1199,6 +1307,37 @@ components:
         commitSha: { type: string }
         shortSha: { type: string }
       required: [status, proposalId, repository, branch, commitSha, shortSha]
+    RepositoryWritePermission:
+      type: object
+      properties:
+        repository: { $ref: "#/components/schemas/RepositoryRef" }
+        branch: { type: string }
+        headSha: { type: string }
+        canPush: { type: boolean }
+        permission: { type: string, enum: [admin, push, pull, none] }
+      required: [repository, branch, headSha, canPush, permission]
+    RufloGitCommitReview:
+      allOf:
+        - $ref: "#/components/schemas/CommitReview"
+        - type: object
+          properties:
+            permission: { $ref: "#/components/schemas/RepositoryWritePermission" }
+          required: [permission]
+    RufloGitPushReview:
+      allOf:
+        - $ref: "#/components/schemas/PushReview"
+        - type: object
+          properties:
+            permission: { $ref: "#/components/schemas/RepositoryWritePermission" }
+          required: [permission]
+    RufloGitPushResult:
+      allOf:
+        - $ref: "#/components/schemas/PushResult"
+        - type: object
+          properties:
+            verified: { type: boolean, enum: [true] }
+            remoteHeadSha: { type: string }
+          required: [verified, remoteHeadSha]
     RepositoryContextUsed:
       type: object
       properties:

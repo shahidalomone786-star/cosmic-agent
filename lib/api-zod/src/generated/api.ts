@@ -1032,6 +1032,177 @@ export const PushChangeProposalResponse = zod.object({
 
 
 /**
+ * Performs a non-destructive GitHub permission and branch check, then returns the final validated diff summary. No commit or push occurs.
+ * @summary Review validated Ruflo changes before commit approval
+ */
+export const GetRufloGitCommitReviewParams = zod.object({
+  "sessionId": zod.coerce.string()
+})
+
+
+
+
+export const GetRufloGitCommitReviewBody = zod.object({
+  "proposalId": zod.string().min(1)
+})
+
+export const GetRufloGitCommitReviewResponse = zod.object({
+  "status": zod.enum(['ready_to_commit']),
+  "proposalId": zod.string(),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "files": zod.array(zod.string()),
+  "addedLines": zod.number(),
+  "removedLines": zod.number(),
+  "diffSummary": zod.string(),
+  "validation": zod.enum(['passed'])
+}).and(zod.object({
+  "permission": zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "headSha": zod.string(),
+  "canPush": zod.boolean(),
+  "permission": zod.enum(['admin', 'push', 'pull', 'none'])
+})
+}))
+
+
+/**
+ * Requires the exact approved code proposal, apply approval, and separate commit approval. Creates a commit object only; the branch is not updated.
+ * @summary Create a Ruflo commit after explicit Git approval
+ */
+export const CommitRufloChangesParams = zod.object({
+  "sessionId": zod.coerce.string()
+})
+
+
+
+
+export const commitRufloChangesBodyMessageMax = 200;
+
+
+
+export const CommitRufloChangesBody = zod.object({
+  "proposalId": zod.string().min(1),
+  "approvalId": zod.string().min(1),
+  "applyApprovalId": zod.string().min(1),
+  "message": zod.string().min(1).max(commitRufloChangesBodyMessageMax)
+})
+
+export const CommitRufloChangesResponse = zod.object({
+  "status": zod.enum(['committed']),
+  "proposalId": zod.string(),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "commitSha": zod.string(),
+  "shortSha": zod.string()
+})
+
+
+/**
+ * Rechecks repository permission and returns the server-held commit. No push occurs.
+ * @summary Review a Ruflo commit before push approval
+ */
+export const GetRufloGitPushReviewParams = zod.object({
+  "sessionId": zod.coerce.string()
+})
+
+
+
+
+export const GetRufloGitPushReviewBody = zod.object({
+  "proposalId": zod.string().min(1)
+})
+
+export const GetRufloGitPushReviewResponse = zod.object({
+  "status": zod.enum(['ready_to_push']),
+  "proposalId": zod.string(),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "commitSha": zod.string(),
+  "shortSha": zod.string()
+}).and(zod.object({
+  "permission": zod.object({
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "headSha": zod.string(),
+  "canPush": zod.boolean(),
+  "permission": zod.enum(['admin', 'push', 'pull', 'none'])
+})
+}))
+
+
+/**
+ * Requires separate push approval, performs a fast-forward-only branch update, and verifies the remote branch points to the approved commit. Never force-pushes or retries automatically.
+ * @summary Push a Ruflo commit after explicit push approval
+ */
+export const PushRufloChangesParams = zod.object({
+  "sessionId": zod.coerce.string()
+})
+
+
+
+
+export const PushRufloChangesBody = zod.object({
+  "proposalId": zod.string().min(1)
+})
+
+export const PushRufloChangesResponse = zod.object({
+  "status": zod.enum(['pushed']),
+  "proposalId": zod.string(),
+  "repository": zod.object({
+  "id": zod.string(),
+  "owner": zod.string(),
+  "name": zod.string(),
+  "branch": zod.string(),
+  "defaultBranch": zod.string(),
+  "webUrl": zod.string()
+}),
+  "branch": zod.string(),
+  "commitSha": zod.string(),
+  "shortSha": zod.string()
+}).and(zod.object({
+  "verified": zod.literal(true),
+  "remoteHeadSha": zod.string()
+}))
+
+
+/**
  * @summary Connect a read-only GitHub repository
  */
 export const ConnectRepositoryBody = zod.object({
