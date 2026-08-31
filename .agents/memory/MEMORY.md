@@ -11,3 +11,4 @@
 - [Express route patterns](express-route-patterns.md) — Express 5 requires mounted middleware for catch-all subpaths; unnamed wildcard route patterns crash startup.
 - [Isolated preview installs](isolated-preview-installs.md) — Generated app previews must install outside the monorepo workspace with pnpm in non-interactive CI mode.
 - [Protected GitHub credential context](github-upload-credential-context.md) — Secure GitHub credentials may work in protected API execution but not in the shell environment.
+- [Coding request execution route](agent-continuation-routing.md) — Repository coding requests must enter the bounded agent session, not the text-only chat stream.

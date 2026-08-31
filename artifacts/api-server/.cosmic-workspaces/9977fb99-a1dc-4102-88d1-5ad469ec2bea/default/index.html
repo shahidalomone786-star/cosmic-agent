@@ -1,2 +1,87 @@
 <!doctype html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cosmic Racing</title><link rel="stylesheet" href="style.css"></head><body><main><h1>Cosmic Racing</h1><p>Arrow keys or WASD to steer. Avoid the asteroids.</p><canvas id="game" width="720" height="420"></canvas><div class="hud"><span>Score <b id="score">0</b></span><button id="restart">Restart race</button></div></main><script src="game.js"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cosmic Racing - Ultimate Space Arcade Game</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Navbar -->
+  <header class="navbar">
+    <div class="container nav-container">
+      <a href="#" class="logo">
+        <span class="logo-icon">🚀</span> Cosmic Racing
+      </a>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container hero-container">
+      <div class="hero-content">
+        <span class="badge">Version 1.0 Live</span>
+        <h1>Race Through the Cosmos</h1>
+        <p>Steer through dense asteroid fields, survive the deep space, and set legendary high scores in the ultimate cosmic arcade racer.</p>
+        <div class="hero-actions">
+          <a href="#features" class="btn btn-primary">Explore Features</a>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="visual-card">
+          <div class="visual-header">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <div class="visual-body">
+            <span class="visual-emoji">🛸</span>
+            <div class="visual-pulse"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section id="features" class="features">
+    <div class="container">
+      <div class="section-header">
+        <h2>Game Features</h2>
+        <p>Experience high-octane space navigation right in your browser.</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">☄️</div>
+          <h3>Asteroid Dodging</h3>
+          <p>Test your reflexes against procedurally generated asteroid belts that speed up over time.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🕹️</div>
+          <h3>Responsive Controls</h3>
+          <p>Smooth steering with WASD or Arrow keys designed for instant response and tight maneuvers.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🏆</div>
+          <h3>Infinite Progression</h3>
+          <p>The longer you survive, the higher your score. Push your limits and beat your personal best.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-container">
+      <p>&copy; 2025 Cosmic Racing. All rights reserved.</p>
+      <div class="footer-links">
+        <a href="#">Privacy Policy</a>
+        <a href="#">Terms of Service</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
