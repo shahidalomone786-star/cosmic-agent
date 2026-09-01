@@ -1,6 +1,18 @@
 export type RufloSessionStatus = "created" | "active" | "completed" | "failed" | "cancelled";
 export type RufloTaskStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
-export type RufloMemoryKind = "technology" | "architecture" | "success" | "validation_problem";
+export type RufloMemoryKind =
+  | "project_fact"
+  | "coding_pattern"
+  | "successful_solution"
+  | "failed_solution"
+  | "architecture_decision"
+  | "warning"
+  | "user_preference"
+  | "tool_pattern"
+  | "technology"
+  | "architecture"
+  | "success"
+  | "validation_problem";
 
 export interface RufloSession {
   id: string;
@@ -56,6 +68,17 @@ export interface RufloMemory {
   kind: RufloMemoryKind;
   fact: string;
   sourceSessionId: string | null;
+  sourceTaskId: string | null;
+  fingerprint: string | null;
+  importance: number;
+  confidence: number;
+  successCount: number;
+  failureCount: number;
+  lastUsedAt: Date | null;
+  embedding: string | null;
+  embeddingProvider: string | null;
+  embeddingModel: string | null;
+  verified: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -65,4 +88,8 @@ export interface CreateRufloMemoryInput {
   kind: RufloMemoryKind;
   fact: string;
   sourceSessionId?: string;
+  sourceTaskId?: string;
+  importance?: number;
+  confidence?: number;
+  outcome?: "success" | "failure" | "neutral";
 }

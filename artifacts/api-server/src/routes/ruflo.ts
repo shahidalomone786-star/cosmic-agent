@@ -24,6 +24,7 @@ import { runRufloPostApproval, type RufloWorkflowPhase, MAX_RUFLO_RECOVERY_ATTEM
 import { runRufloPreparationAgents, type RufloAgentExecution, type RufloProposalOutput } from "../ruflo/ruflo-agents";
 import { assertRemoteHeadMatches, GitHubWriteProviderError, githubWriteProvider } from "../repository/github-write-provider";
 import { formatMemoryContext, projectMemoryKey, rufloMemoryStore } from "../ruflo/memory-store";
+import { extractRufloLearning } from "../ruflo/memory-learning";
 import type { RufloMemory, RufloMemoryKind } from "../ruflo/types";
 
 type RufloPublicActivity = {
@@ -116,6 +117,41 @@ const rufloExecutionLocks = new Set<string>();
 
 router.use((req, res, next) => requireAuthenticatedUser(req, res) ? next() : undefined);
 
+router.get("/ruflo/memory", async (req, res) => {
+  const userId = req.authUser!.id;
+  const projectId = typeof req.query.projectId === "string" && req.query.projectId.trim()
+    ? req.query.projectId.trim().slice(0, 80)
+    : "default";
+  const query = typeof req.query.query === "string" ? req.query.query.trim().slice(0, 500) : "";
+  const requestedLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : 12;
+  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(24, Math.floor(requestedLimit))) : 12;
+  try {
+    const projectKey = projectMemoryKey({ projectId });
+    const memories = await rufloMemoryStore.retrieveRelevant(userId, projectKey, { query, limit });
+    res.json({
+      projectKey,
+      memories: memories.map((memory) => ({
+        id: memory.id,
+        kind: memory.kind,
+        fact: memory.fact,
+        relevance: memory.relevance,
+        confidence: memory.confidence,
+        importance: memory.importance,
+        sourceSessionId: memory.sourceSessionId,
+        sourceTaskId: memory.sourceTaskId,
+        successCount: memory.successCount,
+        failureCount: memory.failureCount,
+        lastUsedAt: memory.lastUsedAt,
+        embeddingProvider: memory.embeddingProvider,
+        embeddingModel: memory.embeddingModel,
+      })),
+    });
+  } catch (error) {
+    logger.warn({ err: error, userId, projectId }, "Ruflo memory query failed");
+    res.status(503).json({ error: "Ruflo memory is temporarily unavailable.", code: "memory_unavailable" });
+  }
+});
+
 router.post("/ruflo/sessions", async (req, res) => {
   const userId = req.authUser!.id;
   const task = typeof req.body?.task === "string" ? req.body.task.trim() : "";
@@ -138,7 +174,7 @@ router.post("/ruflo/sessions", async (req, res) => {
     const projectKey = projectMemoryKey({ projectId, repository });
     let memory: RufloMemory[] = [];
     try {
-      memory = await rufloMemoryStore.listMemory(userId, projectKey);
+      memory = await rufloMemoryStore.retrieveRelevant(userId, projectKey, { query: task, limit: 12 });
     } catch (error) {
       logger.warn({ err: error, userId, projectKey }, "Ruflo memory retrieval skipped");
     }
@@ -748,15 +784,25 @@ async function rememberRufloSessionFacts(
 ): Promise<void> {
   const inspection = session.observations.find((item) => item.tool === "inspect_repository" && item.status === "completed");
   const result = inspection?.result;
-  const facts: Array<{ kind: RufloMemoryKind; fact: string }> = [];
+  const facts: Array<{ kind: RufloMemoryKind; fact: string; confidence: number; importance: number }> = [];
   if (result && typeof result === "object") {
     const data = result as Record<string, unknown>;
     const technology = [stringValue(data.language), stringValue(data.framework), stringValue(data.packageManager)].filter(Boolean);
-    if (technology.length) facts.push({ kind: "technology", fact: `Project technology: ${technology.join(" · ")}` });
+    if (technology.length) facts.push({
+      kind: "project_fact",
+      fact: `Project technology: ${technology.join(" · ")}`,
+      confidence: 0.75,
+      importance: 65,
+    });
     if (Array.isArray(data.architecture)) {
       for (const item of data.architecture.slice(0, 4)) {
         const fact = typeof item === "string" ? item : item && typeof item === "object" && "description" in item && typeof item.description === "string" ? item.description : "";
-        if (fact.trim()) facts.push({ kind: "architecture", fact: `Architecture pattern: ${fact}` });
+        if (fact.trim()) facts.push({
+          kind: "architecture_decision",
+          fact: `Observed architecture pattern: ${fact}`,
+          confidence: 0.65,
+          importance: 60,
+        });
       }
     }
   }
@@ -772,18 +818,22 @@ async function rememberRufloOutcome(
   entry: RuntimeEntry,
   workflow: { status: "completed" | "waiting_approval" | "failed"; validation?: { status: "pass" | "fail" | "not-verified"; summary: string } },
 ): Promise<void> {
-  const facts: Array<{ kind: RufloMemoryKind; fact: string }> = [];
-  if (workflow.status === "completed" && entry.proposal?.summary) {
-    facts.push({ kind: "success", fact: `Successful task: ${entry.proposal.summary}` });
-  }
-  if (workflow.validation && workflow.validation.status !== "pass") {
-    facts.push({ kind: "validation_problem", fact: `Recurring validation problem: ${workflow.validation.summary}` });
-  }
-  await Promise.allSettled(facts.map((fact) => rufloMemoryStore.remember(userId, {
+  const candidates = extractRufloLearning({
+    session: entry.session,
+    proposal: entry.proposal,
+    workflowStatus: workflow.status,
+    validation: workflow.validation,
+  });
+  await Promise.allSettled(candidates.map((candidate) => rufloMemoryStore.remember(userId, {
     projectKey: entry.projectKey,
     sourceSessionId: entry.session?.id,
-    ...fact,
+    kind: candidate.kind,
+    fact: candidate.fact,
+    confidence: candidate.confidence,
+    importance: candidate.importance,
+    outcome: candidate.outcome,
   })));
+  await rufloMemoryStore.cleanup(userId, entry.projectKey).catch(() => undefined);
 }
 
 function stringValue(value: unknown): string {

@@ -1,4 +1,4 @@
-import { index, pgEnum, pgTable, integer, text, timestamp } from "drizzle-orm/pg-core";
+import { index, pgEnum, pgTable, integer, real, text, timestamp, boolean } from "drizzle-orm/pg-core";
 import { usersTable } from "./auth";
 
 export const rufloSessionStatusEnum = pgEnum("ruflo_session_status", [
@@ -18,6 +18,15 @@ export const rufloTaskStatusEnum = pgEnum("ruflo_task_status", [
 ]);
 
 export const rufloMemoryKindEnum = pgEnum("ruflo_memory_kind", [
+  "project_fact",
+  "coding_pattern",
+  "successful_solution",
+  "failed_solution",
+  "architecture_decision",
+  "warning",
+  "user_preference",
+  "tool_pattern",
+  // Retained so existing Phase 1 rows remain readable during the transition.
   "technology",
   "architecture",
   "success",
@@ -70,6 +79,17 @@ export const rufloMemoryTable = pgTable(
     kind: rufloMemoryKindEnum("kind").notNull(),
     fact: text("fact").notNull(),
     sourceSessionId: text("source_session_id").references(() => rufloSessionsTable.id, { onDelete: "set null" }),
+    sourceTaskId: text("source_task_id").references(() => rufloTasksTable.id, { onDelete: "set null" }),
+    fingerprint: text("fingerprint"),
+    importance: integer("importance").notNull().default(50),
+    confidence: real("confidence").notNull().default(0.5),
+    successCount: integer("success_count").notNull().default(0),
+    failureCount: integer("failure_count").notNull().default(0),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    embedding: text("embedding"),
+    embeddingProvider: text("embedding_provider"),
+    embeddingModel: text("embedding_model"),
+    verified: boolean("verified").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -79,5 +99,16 @@ export const rufloMemoryTable = pgTable(
       table.projectKey,
       table.updatedAt,
     ),
+    userProjectKindIdx: index("ruflo_memory_user_project_kind_idx").on(
+      table.userId,
+      table.projectKey,
+      table.kind,
+    ),
+    userProjectLastUsedIdx: index("ruflo_memory_user_project_last_used_idx").on(
+      table.userId,
+      table.projectKey,
+      table.lastUsedAt,
+    ),
+    fingerprintIdx: index("ruflo_memory_fingerprint_idx").on(table.userId, table.projectKey, table.fingerprint),
   }),
 );
