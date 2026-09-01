@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "wKqO49dDA1FLVdLNJJggq"
+uri = "file://artifacts/api-server/src/ruflo/RUFLO_ARCHITECTURE_AUDIT.md"
+type = "text"
+title = "Ruflo Architecture Audit"
+description = "Phase 0 static/read-only architecture audit covering Ruflo runtime, swarm capability, safety boundaries, persistence, providers, GitHub, frontend, security findings, capability matrix, risks, and recommended phase order."
+logical_id = "4714af8c-12bd-4b1d-b540-735b9ff4bd84"
+content_hash = "sha256:6277431601d50163debd955d0db0c1a8987fdeecd523473039196bccdb725b26"
+size = 46491
+mtime_ms = 1788244569496
+storage_uri = "gcs://replit-rams-assets-pike/rams/assets/repl:e60d7fcf-5fb2-486a-b61a-531400dcebf3/4714af8c-12bd-4b1d-b540-735b9ff4bd84/b693cd9c-57c4-4f33-b6e7-1ba36d4ef30e"
+storage_version_token = "1788244604904972"
+content_type = "text/markdown"
