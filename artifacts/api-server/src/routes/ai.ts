@@ -283,7 +283,7 @@ router.post("/ai/change-proposal/approve", (req, res) => {
     return;
   }
   try {
-     const approval = approveProposal(registered.proposal, registered.repository, userId, session?.id, parsed.data.action);
+     const approval = approveProposal(registered.proposal, registered.repository, userId, undefined, parsed.data.action, session?.id ?? registered.sessionId);
      if (parsed.data.action === "apply") recordLocalLifecycle(proposalId, "applying", "Approval recorded. No other write path is authorized.");
      res.json(approval);
   } catch (error) {

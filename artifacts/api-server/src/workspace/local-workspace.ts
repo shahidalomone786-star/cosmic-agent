@@ -2,7 +2,6 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-const root = path.resolve(process.env.COSMIC_WORKSPACE_ROOT ?? path.join(process.cwd(), ".cosmic-workspaces"));
 const blocked = /(^|\/)(\.git|node_modules|\.env(?:\..*)?|secrets?|credentials?)(\/|$)|(^|\/).*?\.(pem|key|p12|pfx|crt)$/i;
 const protectedAuth = /(^|\/)(authStore|AuthContext)\.(ts|tsx|js|jsx)$/;
 const binary = /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|tar|woff2?|mp[34-9]|exe|dll|so|dylib)$/i;
@@ -19,12 +18,28 @@ export type WorkspaceInspection = {
 
 export function workspacePath(userId: string, projectId: string): string {
   const clean = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) || "default";
-  return path.join(root, clean(userId), clean(projectId));
+  return path.join(workspaceRoot(), clean(userId), clean(projectId));
 }
 
 export function safeWorkspaceRelative(input: string): string {
-  const normalized = input.replaceAll("\\", "/").replace(/^\/+/, "");
-  if (!normalized || input.startsWith("/") || normalized.startsWith("../") || normalized.includes("/../") || path.isAbsolute(input) || blocked.test(normalized) || binary.test(normalized)) {
+  if (typeof input !== "string" || input.includes("\0")) throw new Error("Unsafe workspace path rejected.");
+  const decoded = decodePathForValidation(input);
+  const normalizedInput = decoded.replaceAll("\\", "/");
+  const segments = normalizedInput.split("/");
+  const normalized = path.posix.normalize(normalizedInput);
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalizedInput.startsWith("/") ||
+    normalizedInput.startsWith("\\") ||
+    segments.includes("..") ||
+    normalized.startsWith("../") ||
+    normalized === ".." ||
+    path.isAbsolute(input) ||
+    path.win32.isAbsolute(input) ||
+    blocked.test(normalized) ||
+    binary.test(normalized)
+  ) {
     throw new Error("Unsafe workspace path rejected.");
   }
   return normalized;
@@ -32,14 +47,16 @@ export function safeWorkspaceRelative(input: string): string {
 
 export async function ensureWorkspace(userId: string, projectId: string): Promise<string> {
   const directory = workspacePath(userId, projectId);
+  const root = workspaceRoot();
+  await fs.mkdir(root, { recursive: true });
   await fs.mkdir(directory, { recursive: true });
-  return directory;
+  return assertWorkspacePath(root, path.relative(root, directory), true);
 }
 
 export async function listWorkspace(userId: string, projectId: string, relative = ""): Promise<WorkspaceFile[]> {
   const base = await ensureWorkspace(userId, projectId);
   const safe = relative ? safeWorkspaceRelative(relative) : "";
-  const directory = path.join(base, safe);
+  const directory = safe ? await assertWorkspacePath(base, safe, true) : base;
   const entries = await fs.readdir(directory, { withFileTypes: true });
   return Promise.all(entries.sort((a, b) => a.name.localeCompare(b.name)).filter((entry) => {
     const candidate = path.posix.join(safe.replaceAll("\\", "/"), entry.name);
@@ -55,10 +72,11 @@ export async function listWorkspace(userId: string, projectId: string, relative 
 export async function readWorkspaceFile(userId: string, projectId: string, relative: string): Promise<{ path: string; content: string; size: number }> {
   const base = await ensureWorkspace(userId, projectId);
   const safe = safeWorkspaceRelative(relative);
-  const stat = await fs.stat(path.join(base, safe));
+  const absolute = await assertWorkspacePath(base, safe, true);
+  const stat = await fs.stat(absolute);
   if (!stat.isFile()) throw new Error("Only regular text files can be read.");
   if (stat.size > 500_000) throw new Error("Workspace file is too large to read.");
-  const content = await fs.readFile(path.join(base, safe), "utf8");
+  const content = await fs.readFile(absolute, "utf8");
   return { path: safe, content, size: Buffer.byteLength(content) };
 }
 
@@ -68,11 +86,15 @@ export async function writeWorkspaceFile(userId: string, projectId: string, rela
   const safe = safeWorkspaceRelative(relative);
   assertWritablePath(safe);
   const absolute = path.join(base, safe);
+  await assertWorkspacePath(base, safe, await pathExists(absolute));
+  await assertWorkspacePath(base, path.dirname(safe), false);
   await fs.mkdir(path.dirname(absolute), { recursive: true });
+  await assertWorkspacePath(base, path.dirname(safe), false);
   const temporary = `${absolute}.cosmic-${process.pid}-${Date.now()}.tmp`;
   await fs.writeFile(temporary, content, "utf8");
+  await assertWorkspacePath(base, path.dirname(safe), true);
   await fs.rename(temporary, absolute);
-  const stat = await fs.stat(absolute);
+  const stat = await fs.stat(await assertWorkspacePath(base, safe, true));
   return { path: safe, type: "file", size: stat.size, modifiedAt: stat.mtime.toISOString() };
 }
 
@@ -80,14 +102,22 @@ export async function removeWorkspacePath(userId: string, projectId: string, rel
   const base = await ensureWorkspace(userId, projectId);
   const safe = safeWorkspaceRelative(relative);
   assertWritablePath(safe);
-  await fs.rm(path.join(base, safe), { recursive: true, force: false });
+  const absolute = await assertWorkspacePath(base, safe, false);
+  if (await pathExists(absolute)) await assertWorkspacePath(base, safe, true);
+  await assertWorkspacePath(base, path.dirname(safe), true);
+  if (await pathExists(absolute)) await assertWorkspacePath(base, safe, true);
+  await fs.rm(absolute, { recursive: true, force: false });
 }
 
 export async function createWorkspaceDirectory(userId: string, projectId: string, relative: string): Promise<void> {
   const base = await ensureWorkspace(userId, projectId);
   const safe = safeWorkspaceRelative(relative);
   assertWritablePath(safe);
-  await fs.mkdir(path.join(base, safe), { recursive: true });
+  const absolute = path.join(base, safe);
+  await assertWorkspacePath(base, safe, await pathExists(absolute));
+  await assertWorkspacePath(base, path.dirname(safe), true);
+  await fs.mkdir(absolute, { recursive: true });
+  await assertWorkspacePath(base, safe, true);
 }
 
 export async function renameWorkspacePath(userId: string, projectId: string, from: string, to: string): Promise<void> {
@@ -98,8 +128,35 @@ export async function renameWorkspacePath(userId: string, projectId: string, fro
   assertWritablePath(target);
   const absoluteSource = path.join(base, source);
   const absoluteTarget = path.join(base, target);
+  await assertWorkspacePath(base, source, await pathExists(absoluteSource));
+  await assertWorkspacePath(base, target, await pathExists(absoluteTarget));
   await fs.mkdir(path.dirname(absoluteTarget), { recursive: true });
+  await assertWorkspacePath(base, path.dirname(target), true);
+  await assertWorkspacePath(base, source, await pathExists(absoluteSource));
+  await assertWorkspacePath(base, target, await pathExists(absoluteTarget));
   await fs.rename(absoluteSource, absoluteTarget);
+}
+
+/**
+ * Resolve a workspace-relative path only after checking every existing
+ * ancestor. The final component is followed for reads and deliberately not
+ * followed for replacement/removal/rename so an internal symlink can be
+ * safely replaced or moved without ever following an external target.
+ */
+export async function assertWorkspacePath(base: string, relative: string, followFinal: boolean): Promise<string> {
+  const canonicalBase = await fs.realpath(base);
+  const absolute = path.resolve(base, relative);
+  if (!isWithin(canonicalBase, absolute)) throw new Error("Workspace path escaped its boundary.");
+
+  const candidate = followFinal ? absolute : path.dirname(absolute);
+  const existing = await nearestExistingPath(candidate);
+  const canonicalExisting = await fs.realpath(existing);
+  if (!isWithin(canonicalBase, canonicalExisting)) throw new Error("Workspace symlink escaped its boundary.");
+  if (followFinal) {
+    const canonicalTarget = await fs.realpath(absolute);
+    if (!isWithin(canonicalBase, canonicalTarget)) throw new Error("Workspace symlink escaped its boundary.");
+  }
+  return absolute;
 }
 
 function assertWritablePath(relative: string): void {
@@ -194,4 +251,51 @@ export function changeStats(original: string, proposed: string) {
 
 export function workspaceProposalId(files: Array<{ path: string; proposedCode: string }>, workspaceIdentity = ""): string {
   return createHash("sha256").update(`${workspaceIdentity}\n${files.map((file) => `${file.path}\0${"operation" in file ? String(file.operation) : ""}\0${"fromPath" in file ? String(file.fromPath ?? "") : ""}\0${file.proposedCode}`).join("\n")}`).digest("hex").slice(0, 16);
+}
+
+function decodePathForValidation(input: string): string {
+  let decoded = input;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let next: string;
+    try {
+      next = decodeURIComponent(decoded);
+    } catch {
+      break;
+    }
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+}
+
+async function nearestExistingPath(target: string): Promise<string> {
+  let current = path.resolve(target);
+  while (true) {
+    try {
+      await fs.lstat(current);
+      return current;
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) throw new Error("Workspace path could not be resolved.");
+      current = parent;
+    }
+  }
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.lstat(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isWithin(base: string, candidate: string): boolean {
+  const relative = path.relative(base, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function workspaceRoot(): string {
+  return path.resolve(process.env.COSMIC_WORKSPACE_ROOT ?? path.join(process.cwd(), ".cosmic-workspaces"));
 }

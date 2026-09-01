@@ -6,6 +6,7 @@ import type { ChangeProposal } from "../ai/change-proposal";
 import { invalidateRepositoryContext, type RepositoryRef } from "./github-provider";
 import { githubWriteProvider, type GitHubWriteProvider } from "./github-write-provider";
 import { assertApproval, type ProposalApproval } from "../ai/approval-gate";
+import { assertWorkspacePath } from "../workspace/local-workspace";
 
 export type ExecutionStatus = "applied" | "validation_failed";
 export type ExecutionResult = {
@@ -90,6 +91,8 @@ type Session = {
   workspaceRoot?: string;
   ownerId?: string;
   projectId?: string;
+  sessionId?: string;
+  pushed: boolean;
 };
 
 const MAX_FILES = Number(process.env.COSMIC_MAX_PROPOSAL_FILES ?? 20);
@@ -116,7 +119,15 @@ const sessionsCommands = [
   { name: "api build", args: ["--filter", "@workspace/api-server", "run", "build"] },
 ];
 
-export function registerProposal(proposal: ChangeProposal, repository?: RepositoryRef, provider?: "groq" | "gemini", workspaceRoot?: string, ownerId?: string, projectId?: string): void {
+export function registerProposal(
+  proposal: ChangeProposal,
+  repository?: RepositoryRef,
+  provider?: "groq" | "gemini",
+  workspaceRoot?: string,
+  ownerId?: string,
+  projectId?: string,
+  sessionId?: string,
+): void {
   if (proposal.files.length > MAX_FILES || proposal.addedLines > MAX_ADDED || proposal.removedLines > MAX_REMOVED || proposal.files.reduce((sum, file) => sum + Buffer.byteLength(file.originalCode) + Buffer.byteLength(file.proposedCode), 0) > MAX_TEXT_BYTES) {
     throw new PatchExecutionError("too_large", `Proposal exceeds safe limits: ${MAX_FILES} files, ${MAX_ADDED} added lines, ${MAX_REMOVED} removed lines, or ${MAX_TEXT_BYTES} bytes.`);
   }
@@ -127,12 +138,42 @@ export function registerProposal(proposal: ChangeProposal, repository?: Reposito
     if (file.fromPath) safeRelative(file.fromPath);
     if (Buffer.byteLength(file.proposedCode) > MAX_TEXT_BYTES) throw new PatchExecutionError("too_large", `File exceeds the safe size limit: ${file.path}`);
   }
-  sessions.set(proposal.proposalId, { proposal, repository, provider, workspaceRoot, ownerId, projectId, snapshots: [], applied: false, undoAvailable: false, validated: false, staged: false });
+  sessions.set(proposal.proposalId, {
+    proposal,
+    repository,
+    provider,
+    workspaceRoot,
+    ownerId,
+    projectId,
+    sessionId,
+    snapshots: [],
+    applied: false,
+    undoAvailable: false,
+    validated: false,
+    staged: false,
+    pushed: false,
+  });
 }
 
-export function getRegisteredProposal(proposalId: string): { proposal: ChangeProposal; repository?: RepositoryRef; provider?: "groq" | "gemini"; workspaceRoot?: string; ownerId?: string; projectId?: string } | undefined {
+export function getRegisteredProposal(proposalId: string): {
+  proposal: ChangeProposal;
+  repository?: RepositoryRef;
+  provider?: "groq" | "gemini";
+  workspaceRoot?: string;
+  ownerId?: string;
+  projectId?: string;
+  sessionId?: string;
+} | undefined {
   const session = sessions.get(proposalId);
-  return session ? { proposal: session.proposal, repository: session.repository, provider: session.provider, workspaceRoot: session.workspaceRoot, ownerId: session.ownerId, projectId: session.projectId } : undefined;
+  return session ? {
+    proposal: session.proposal,
+    repository: session.repository,
+    provider: session.provider,
+    workspaceRoot: session.workspaceRoot,
+    ownerId: session.ownerId,
+    projectId: session.projectId,
+    sessionId: session.sessionId,
+  } : undefined;
 }
 
 export function isProposalPreviewable(proposalId: string): boolean {
@@ -150,7 +191,15 @@ export async function executeProposal(proposalId: string, approvalId?: string): 
   if (!session) throw new PatchExecutionError("not_found", "This proposal is no longer available. Please regenerate it.");
   if (!approvalId) throw new PatchExecutionError("invalid_proposal", "Explicit user approval is required before applying this proposal.");
   try {
-    session.approval = assertApproval(approvalId, session.proposal, session.repository);
+    session.approval = assertApproval(
+      approvalId,
+      session.proposal,
+      session.repository,
+      undefined,
+      "apply",
+      session.sessionId,
+      session.ownerId,
+    );
   } catch (error) {
     if (error instanceof Error && "code" in error) {
       const code = (error as { code: string }).code;
@@ -160,13 +209,16 @@ export async function executeProposal(proposalId: string, approvalId?: string): 
   }
   if (session.applied) throw new PatchExecutionError("already_applied", "This proposal has already been applied.");
   const snapshots: Snapshot[] = [];
+  const workspaceRoot = session.workspaceRoot ?? executionRoot;
   for (const file of session.proposal.files) {
     const relativePath = safeRelative(file.path);
-    const absolutePath = path.join(session.workspaceRoot ?? executionRoot, relativePath);
+    const absolutePath = path.join(workspaceRoot, relativePath);
     const sourceRelativePath = file.operation === "rename" ? safeRelative(file.fromPath ?? "") : relativePath;
-    const sourceAbsolutePath = path.join(session.workspaceRoot ?? executionRoot, sourceRelativePath);
+    const sourceAbsolutePath = path.join(workspaceRoot, sourceRelativePath);
     const sourceExists = await pathExists(sourceAbsolutePath);
     const targetExists = await pathExists(absolutePath);
+    await assertExecutionPath(workspaceRoot, relativePath, targetExists);
+    if (file.operation === "rename") await assertExecutionPath(workspaceRoot, sourceRelativePath, sourceExists);
     const current = sourceExists && file.operation === "rename" ? await readText(sourceAbsolutePath) : targetExists ? await readText(absolutePath) : "";
     if (file.operation === "create" || file.operation === "directory_create") {
       if (targetExists) throw new PatchExecutionError("stale_file", `New path already exists: ${relativePath}`);
@@ -182,13 +234,22 @@ export async function executeProposal(proposalId: string, approvalId?: string): 
   }
   session.snapshots = snapshots;
   try {
-    await writeAtomically(session.proposal.files, snapshots);
+    session.approval = assertApproval(
+      approvalId,
+      session.proposal,
+      session.repository,
+      undefined,
+      "apply",
+      session.sessionId,
+      session.ownerId,
+    );
+    await writeAtomically(session.proposal.files, snapshots, workspaceRoot);
     session.applied = true;
     session.validated = false;
     session.undoAvailable = true;
     return { status: "applied", proposalId, files: snapshots.map((item) => item.relativePath), addedLines: session.proposal.addedLines, removedLines: session.proposal.removedLines, typecheck: "not-verified", build: "not-verified", message: "Changes applied locally. Deterministic validation is required before commit review.", canUndo: true };
   } catch (error) {
-    await restoreSnapshots(snapshots);
+    await restoreSnapshots(snapshots, workspaceRoot);
     if (error instanceof PatchExecutionError) throw error;
     throw new PatchExecutionError("validation_failed", "Changes were rolled back because validation could not complete.");
   }
@@ -197,7 +258,7 @@ export async function executeProposal(proposalId: string, approvalId?: string): 
 export async function rejectAppliedProposal(proposalId: string): Promise<void> {
   const session = sessions.get(proposalId);
   if (!session?.applied) throw new PatchExecutionError("invalid_proposal", "There is no applied proposal to roll back.");
-  await restoreSnapshots(session.snapshots);
+  await restoreSnapshots(session.snapshots, session.workspaceRoot ?? executionRoot);
   session.applied = false;
   session.validated = false;
   session.undoAvailable = false;
@@ -218,7 +279,15 @@ export async function stageProposal(proposalId: string, approvalId: string): Pro
   }
   if (!approvalId) throw new PatchExecutionError("invalid_proposal", "Explicit user approval is required before staging.");
   try {
-    session.approval = assertApproval(approvalId, session.proposal, session.repository, undefined, "apply");
+    session.approval = assertApproval(
+      approvalId,
+      session.proposal,
+      session.repository,
+      undefined,
+      "apply",
+      session.sessionId,
+      session.ownerId,
+    );
   } catch (error) {
     throw new PatchExecutionError("invalid_proposal", error instanceof Error ? error.message : "The approval could not be verified.");
   }
@@ -252,8 +321,9 @@ export async function commitProposal(proposalId: string, approvalId: string, mes
   if (!session) throw new PatchExecutionError("not_found", "This proposal is no longer available.");
   if (!session.staged) throw new PatchExecutionError("invalid_proposal", "The approved proposal must be staged before commit.");
   if (!approvalId) throw new PatchExecutionError("invalid_proposal", "Explicit commit approval is required.");
+  if (session.commit) throw new PatchExecutionError("already_applied", "This proposal has already been committed.");
   try {
-    assertApproval(approvalId, session.proposal, session.repository, undefined, "commit");
+    assertApproval(approvalId, session.proposal, session.repository, undefined, "commit", session.sessionId, session.ownerId);
   } catch (error) {
     throw new PatchExecutionError("invalid_proposal", error instanceof Error ? error.message : "The commit approval could not be verified.");
   }
@@ -295,8 +365,9 @@ export async function pushProposal(proposalId: string, approvalId: string, provi
   const session = sessions.get(proposalId);
   if (!session?.commit) throw new PatchExecutionError("invalid_proposal", "A successful commit approval is required before push.");
   if (!approvalId) throw new PatchExecutionError("invalid_proposal", "Explicit push approval is required.");
+  if (session.pushed) throw new PatchExecutionError("already_applied", "This proposal has already been pushed.");
   try {
-    assertApproval(approvalId, session.proposal, session.repository, undefined, "push");
+    assertApproval(approvalId, session.proposal, session.repository, undefined, "push", session.sessionId, session.ownerId);
   } catch (error) {
     throw new PatchExecutionError("invalid_proposal", error instanceof Error ? error.message : "The push approval could not be verified.");
   }
@@ -306,6 +377,7 @@ export async function pushProposal(proposalId: string, approvalId: string, provi
   if (!comparison.unchanged) throw new PatchExecutionError("validation_failed", "Remote branch changed. Push was cancelled to protect existing work.");
   const pushed = await provider.pushBranch(review.repository, review.branch, expectedHeadSha, session.commit.commitSha);
   invalidateRepositoryContext(review.repository);
+  session.pushed = true;
   return { status: "pushed", ...pushed, proposalId };
 }
 
@@ -313,11 +385,12 @@ export async function undoProposal(proposalId: string): Promise<void> {
   const session = sessions.get(proposalId);
   if (!session?.applied || !session.undoAvailable) throw new PatchExecutionError("not_found", "No undo snapshot is available for this proposal.");
   for (const snapshot of session.snapshots) {
+    await assertExecutionPath(session.workspaceRoot ?? executionRoot, snapshot.relativePath, true);
     const current = await fs.readFile(snapshot.absolutePath, "utf8");
     const applied = session.proposal.files.find((file) => safeRelative(file.path) === snapshot.relativePath)?.proposedCode;
     if (current !== applied) throw new PatchExecutionError("stale_file", "The file changed after application. Undo was not performed.");
   }
-  await restoreSnapshots(session.snapshots);
+  await restoreSnapshots(session.snapshots, session.workspaceRoot ?? executionRoot);
   session.undoAvailable = false;
   session.applied = false;
 }
@@ -332,24 +405,37 @@ function safeRelative(input: string): string {
   return relative;
 }
 
-async function writeAtomically(files: ChangeProposal["files"], snapshots: Snapshot[]): Promise<void> {
+async function writeAtomically(files: ChangeProposal["files"], snapshots: Snapshot[], workspaceRoot: string): Promise<void> {
   const tempFiles: string[] = [];
   try {
     for (const file of files) {
       const snapshot = snapshots.find((item) => item.relativePath === safeRelative(file.path));
       if (!snapshot) throw new PatchExecutionError("invalid_proposal", "Proposal file snapshot mismatch.");
       if (file.operation === "directory_create") {
+        await assertExecutionPath(workspaceRoot, snapshot.relativePath, false);
+        await assertExecutionPath(workspaceRoot, path.dirname(snapshot.relativePath), true);
         await fs.mkdir(snapshot.absolutePath, { recursive: true });
       } else if (file.operation === "delete") {
+        await assertExecutionPath(workspaceRoot, snapshot.relativePath, true);
         await fs.rm(snapshot.absolutePath, { recursive: false, force: false });
       } else if (file.operation === "rename") {
+        await assertExecutionPath(workspaceRoot, snapshot.sourceRelativePath!, true);
+        await assertExecutionPath(workspaceRoot, snapshot.relativePath, false);
         await fs.mkdir(path.dirname(snapshot.absolutePath), { recursive: true });
+        await assertExecutionPath(workspaceRoot, path.dirname(snapshot.relativePath), true);
+        await assertExecutionPath(workspaceRoot, snapshot.sourceRelativePath!, true);
+        await assertExecutionPath(workspaceRoot, snapshot.relativePath, false);
         await fs.rename(snapshot.sourceAbsolutePath!, snapshot.absolutePath);
       } else {
+        await assertExecutionPath(workspaceRoot, snapshot.relativePath, snapshot.targetExists || snapshot.exists);
+        await assertExecutionPath(workspaceRoot, path.dirname(snapshot.relativePath), true);
         await fs.mkdir(path.dirname(snapshot.absolutePath), { recursive: true });
         const temp = `${snapshot.absolutePath}.cosmic-${process.pid}-${Date.now()}.tmp`;
+        await assertExecutionPath(workspaceRoot, path.dirname(snapshot.relativePath), true);
         await fs.writeFile(temp, file.proposedCode, "utf8");
         tempFiles.push(temp);
+        await assertExecutionPath(workspaceRoot, path.dirname(snapshot.relativePath), true);
+        await assertExecutionPath(workspaceRoot, snapshot.relativePath, snapshot.targetExists || snapshot.exists);
         await fs.rename(temp, snapshot.absolutePath);
       }
     }
@@ -358,11 +444,15 @@ async function writeAtomically(files: ChangeProposal["files"], snapshots: Snapsh
   }
 }
 
-async function restoreSnapshots(snapshots: Snapshot[]): Promise<void> {
+async function restoreSnapshots(snapshots: Snapshot[], workspaceRoot: string): Promise<void> {
   for (const snapshot of [...snapshots].reverse()) {
+    await assertExecutionPath(workspaceRoot, snapshot.relativePath, await pathExists(snapshot.absolutePath));
     if (snapshot.operation === "rename") {
       if (await pathExists(snapshot.absolutePath)) {
+        await assertExecutionPath(workspaceRoot, snapshot.relativePath, true);
         await fs.mkdir(path.dirname(snapshot.sourceAbsolutePath!), { recursive: true });
+        await assertExecutionPath(workspaceRoot, snapshot.sourceRelativePath!, false);
+        await assertExecutionPath(workspaceRoot, snapshot.relativePath, true);
         await fs.rename(snapshot.absolutePath, snapshot.sourceAbsolutePath!);
       }
       continue;
@@ -376,9 +466,12 @@ async function restoreSnapshots(snapshots: Snapshot[]): Promise<void> {
       continue;
     }
     if (snapshot.operation === "delete" || snapshot.operation === "edit") {
+      await assertWorkspacePath(workspaceRoot, path.dirname(snapshot.relativePath), true);
       await fs.mkdir(path.dirname(snapshot.absolutePath), { recursive: true });
+      await assertWorkspacePath(workspaceRoot, snapshot.relativePath, false);
       await fs.writeFile(snapshot.absolutePath, snapshot.content, "utf8");
     } else {
+      await assertExecutionPath(workspaceRoot, snapshot.relativePath, false);
       await fs.unlink(snapshot.absolutePath).catch(() => undefined);
     }
   }
@@ -389,6 +482,7 @@ async function verifyValidatedFiles(session: Session): Promise<void> {
     throw new PatchExecutionError("invalid_proposal", "The validated file set no longer matches the approved proposal.");
   }
   for (const snapshot of session.snapshots) {
+    await assertExecutionPath(session.workspaceRoot ?? executionRoot, snapshot.relativePath, true);
     const file = session.proposal.files.find((candidate) => safeRelative(candidate.path) === snapshot.relativePath);
     if (!file || file.proposedCode.includes("\0") || protectedPath.test(snapshot.relativePath) || protectedAuth.test(snapshot.relativePath)) {
       throw new PatchExecutionError("protected_file", "Protected or invalid files cannot be committed.");
@@ -446,4 +540,12 @@ function runFixedCommand(args: string[]): Promise<{ ok: boolean; output: string 
     child.on("close", (code) => resolve({ ok: code === 0, output: code === 0 ? "Passed" : output.slice(-1200) }));
     child.on("error", () => resolve({ ok: false, output: "Validation command could not start." }));
   });
+}
+
+async function assertExecutionPath(base: string, relative: string, followFinal: boolean): Promise<string> {
+  try {
+    return await assertWorkspacePath(base, relative, followFinal);
+  } catch (error) {
+    throw new PatchExecutionError("unsafe_path", error instanceof Error ? error.message : "Workspace path escaped its boundary.");
+  }
 }

@@ -481,7 +481,7 @@ export async function executeAgentTool(
     const paths = Array.isArray(input.paths) ? input.paths.filter((path): path is string => typeof path === "string") : [];
     result = await run(createChangeProposal(provider, session.activeModel, session.task, repository, uniquePaths(paths), role));
     const proposal = result as ChangeProposal;
-    registerProposal(proposal, session.repository, provider.id, undefined, session.ownerId, undefined);
+    registerProposal(proposal, session.repository, provider.id, undefined, session.ownerId, undefined, session.id);
     session.proposal = { proposalId: proposal.proposalId, files: proposal.files.map((file) => file.path), risk: proposal.risk, summary: proposal.summary };
     session.proposalData = proposal;
     proposalSessions.set(proposal.proposalId, session.id);
@@ -770,7 +770,7 @@ export async function runAgentSession(provider: AiProvider, input: AgentRunInput
       reserveProviderBudget(session, Math.min(12_000, Math.max(1_000, session.task.length + session.context.approximateChars)));
       const proposalRole = session.orchestration.selectedWorkers.find((role): role is "frontend" | "backend" => role === "frontend" || role === "backend") ?? "manager";
       const proposal = await executeAgentTool(provider, session, "create_proposal", { repository: session.repository, paths: session.selectedFiles, request: session.task }, proposalRole) as ChangeProposal;
-      registerProposal(proposal, session.repository, provider.id, undefined, session.ownerId, undefined);
+      registerProposal(proposal, session.repository, provider.id, undefined, session.ownerId, undefined, session.id);
       session.proposal = {
         proposalId: proposal.proposalId,
         files: proposal.files.map((file) => file.path),

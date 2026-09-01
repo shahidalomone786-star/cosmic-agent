@@ -36,7 +36,7 @@ export async function createRufloProposal(input: RufloProposalInput): Promise<Ch
       paths,
     );
     reviewRufloProposal(proposal, paths);
-    registerProposal(proposal, input.repository, input.provider.id, undefined, input.ownerId);
+    registerProposal(proposal, input.repository, input.provider.id, undefined, input.ownerId, undefined, input.session.id);
     return proposal;
   }
 
@@ -59,6 +59,7 @@ export async function createRufloProposal(input: RufloProposalInput): Promise<Ch
       root,
       input.workspace.userId,
       input.workspace.projectId,
+      input.session.id,
     );
     return proposal;
   }

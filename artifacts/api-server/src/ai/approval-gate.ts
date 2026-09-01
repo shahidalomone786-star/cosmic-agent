@@ -12,6 +12,7 @@ export type ApprovalAction = "apply" | "commit" | "push";
 export type ProposalApproval = {
   approvalId: string;
   taskId?: string;
+  sessionId: string;
   proposalId: string;
   proposalVersion: string;
   repositorySha: string;
@@ -47,12 +48,15 @@ export function approveProposal(
   approvedByUser: string,
   taskId?: string,
   action: ApprovalAction = "apply",
+  sessionId?: string,
 ): ProposalApproval {
   const user = approvedByUser.trim();
   if (!user) throw new ApprovalGateError("unauthenticated", "An authenticated user is required to approve changes.");
+  const boundSessionId = sessionId?.trim() || taskId?.trim() || proposal.proposalId;
   const approval: ProposalApproval = {
     approvalId: randomUUID(),
     taskId,
+    sessionId: boundSessionId,
     proposalId: proposal.proposalId,
     proposalVersion: proposalVersion(proposal),
     repositorySha: repositorySha(repository, proposal),
@@ -71,9 +75,19 @@ export function assertApproval(
   repository: RepositoryRef | undefined,
   taskId?: string,
   action: ApprovalAction = "apply",
+  sessionId?: string,
+  approvedByUser?: string,
 ): ProposalApproval {
   const approval = approvals.get(approvalId);
-  if (!approval || approval.action !== action || approval.proposalId !== proposal.proposalId || (approval.taskId && taskId && approval.taskId !== taskId)) {
+  const expectedSessionId = sessionId?.trim() || taskId?.trim() || proposal.proposalId;
+  if (
+    !approval ||
+    approval.action !== action ||
+    approval.proposalId !== proposal.proposalId ||
+    approval.sessionId !== expectedSessionId ||
+    (approval.taskId && taskId && approval.taskId !== taskId) ||
+    (approvedByUser?.trim() && approval.approvedByUser !== approvedByUser.trim())
+  ) {
     throw new ApprovalGateError("invalid_approval", "This approval does not authorize the requested proposal.");
   }
   if (
