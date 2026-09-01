@@ -22,6 +22,11 @@ type GeminiResponse = {
   responseId?: string;
   modelVersion?: string;
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+  };
 };
 
 export class GeminiProvider implements AiProvider {
@@ -221,8 +226,23 @@ export class GeminiProvider implements AiProvider {
       model: result.modelVersion ?? requestedModel,
       content: extractText(result),
       provider: "gemini",
+      usage: result.usageMetadata && toUsage(
+        result.usageMetadata.promptTokenCount,
+        result.usageMetadata.candidatesTokenCount,
+        result.usageMetadata.totalTokenCount,
+      ),
     };
   }
+}
+
+function toUsage(inputTokens?: number, outputTokens?: number, totalTokens?: number) {
+  if (![inputTokens, outputTokens, totalTokens].every((value) => Number.isFinite(value))) return undefined;
+  return {
+    inputTokens: Math.max(0, Math.floor(inputTokens!)),
+    outputTokens: Math.max(0, Math.floor(outputTokens!)),
+    totalTokens: Math.max(0, Math.floor(totalTokens!)),
+    exact: true,
+  };
 }
 
 function toGeminiBody(request: AiChatRequest) {
@@ -233,7 +253,10 @@ function toGeminiBody(request: AiChatRequest) {
       role: message.role === "assistant" ? "model" : "user",
       parts: [{ text: message.content }],
     })),
-    generationConfig: request.temperature == null ? undefined : { temperature: request.temperature },
+    generationConfig: {
+      ...(request.temperature == null ? {} : { temperature: request.temperature }),
+      ...(request.maxOutputTokens == null ? {} : { maxOutputTokens: request.maxOutputTokens }),
+    },
   };
 }
 

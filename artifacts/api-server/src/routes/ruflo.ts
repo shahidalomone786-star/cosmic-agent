@@ -26,6 +26,19 @@ import { assertRemoteHeadMatches, GitHubWriteProviderError, githubWriteProvider 
 import { formatMemoryContext, projectMemoryKey, rufloMemoryStore } from "../ruflo/memory-store";
 import { extractRufloLearning } from "../ruflo/memory-learning";
 import type { RufloMemory, RufloMemoryKind } from "../ruflo/types";
+import {
+  RufloModelRouter,
+  RufloProviderGateway,
+  type RufloCapabilityClass,
+  type RufloRoutingDecision,
+} from "../ruflo/ruflo-provider-router";
+import {
+  RufloCostTracker,
+  estimateTokens,
+  normalizeRufloBudgetLimits,
+  type RufloBudgetLimits,
+  type RufloCostTotals,
+} from "../ruflo/ruflo-cost-tracker";
 
 type RufloPublicActivity = {
   id: string;
@@ -77,6 +90,13 @@ type RufloPublicSession = {
   proposalAgent?: RufloPublicAgentExecution;
   createdAt: string;
   updatedAt: string;
+  capability: RufloCapabilityClass;
+  routing: {
+    primary: { provider: string; model: string };
+    fallbacks: Array<{ provider: string; model: string }>;
+    reason: string;
+  };
+  usage: RufloCostTotals;
 };
 
 type RufloPublicAgentExecution = {
@@ -92,6 +112,10 @@ type RufloPublicAgentExecution = {
 type RuntimeEntry = {
   ownerId: string;
   model: string;
+  capability: RufloCapabilityClass;
+  routing: RufloRoutingDecision;
+  providerGateway: RufloProviderGateway;
+  costTracker: RufloCostTracker;
   projectKey: string;
   session?: RufloSession;
   proposal?: ChangeProposal;
@@ -108,14 +132,36 @@ type RuntimeEntry = {
   git: RufloPublicGit;
   memoryFactCount: number;
   createdAt: string;
+  usage?: RufloCostTotals;
 };
 
 const router: IRouter = Router();
 const runtimeSessions = new Map<string, RuntimeEntry>();
 const persistedEvents = new Map<string, Set<string>>();
 const rufloExecutionLocks = new Set<string>();
+const rufloModelRouter = new RufloModelRouter(providerManager.getProviders());
 
 router.use((req, res, next) => requireAuthenticatedUser(req, res) ? next() : undefined);
+
+router.get("/ruflo/providers", (_req, res) => {
+  res.json({
+    providers: rufloModelRouter.discover().map((availability) => ({
+      provider: availability.provider,
+      health: availability.health,
+      models: availability.models.map((model) => ({
+        id: model.id,
+        displayName: model.displayName,
+        capabilities: model.capabilities,
+        capabilityClasses: model.capabilityClasses,
+        contextWindow: model.contextWindow,
+        enabled: model.enabled,
+        recommended: model.recommended,
+        costTier: model.costTier,
+      })),
+    })),
+    unsupportedProviders: ["openai", "anthropic", "cohere", "ollama"],
+  });
+});
 
 router.get("/ruflo/memory", async (req, res) => {
   const userId = req.authUser!.id;
@@ -155,7 +201,8 @@ router.get("/ruflo/memory", async (req, res) => {
 router.post("/ruflo/sessions", async (req, res) => {
   const userId = req.authUser!.id;
   const task = typeof req.body?.task === "string" ? req.body.task.trim() : "";
-  const model = typeof req.body?.model === "string" ? req.body.model.trim() : "";
+  const requestedModel = typeof req.body?.model === "string" ? req.body.model.trim() : "";
+  const requestedCapability = isRufloCapability(req.body?.capability) ? req.body.capability : undefined;
   const projectId = typeof req.body?.projectId === "string" && req.body.projectId.trim()
     ? req.body.projectId.trim().slice(0, 80)
     : "default";
@@ -164,13 +211,12 @@ router.post("/ruflo/sessions", async (req, res) => {
     ? req.body.selectedFiles.filter((item: unknown): item is string => typeof item === "string").slice(0, 20)
     : [];
 
-  if (!task || !model) {
-    res.status(400).json({ error: "Describe the task and select an approved model.", code: "invalid_request" });
+  if (!task) {
+    res.status(400).json({ error: "Describe the task for Ruflo to inspect.", code: "invalid_request" });
     return;
   }
 
   try {
-    const provider = providerManager.getProviderForModel(model);
     const projectKey = projectMemoryKey({ projectId, repository });
     let memory: RufloMemory[] = [];
     try {
@@ -178,7 +224,32 @@ router.post("/ruflo/sessions", async (req, res) => {
     } catch (error) {
       logger.warn({ err: error, userId, projectKey }, "Ruflo memory retrieval skipped");
     }
+    const budget = normalizeRufloBudgetLimits(parseBudget(req.body?.budget));
+    const routing = rufloModelRouter.select({
+      task,
+      capability: requestedCapability,
+      requestedModel: requestedModel || undefined,
+      contextTokens: estimateTokens(`${task}\n${formatMemoryContext(memory)}`),
+      outputTokens: 2_048,
+      remainingTokens: budget.maxSessionTokens,
+    });
     const stored = await rufloSessionStore.createSession(userId, { goal: task });
+    const costTracker = new RufloCostTracker({ limits: budget });
+    const provider = new RufloProviderGateway(routing, costTracker, {
+      sessionId: stored.id,
+      capability: routing.capability,
+      onAttempt: (attempt) => {
+        if (!attempt.fallbackUsed && !attempt.classification) return;
+        logger.info({
+          sessionId: stored.id,
+          provider: attempt.provider,
+          model: attempt.model,
+          capability: attempt.capability,
+          fallbackUsed: attempt.fallbackUsed,
+          failureClass: attempt.classification,
+        }, "Ruflo provider route attempt");
+      },
+    });
     const createdAt = stored.createdAt.toISOString();
     const initialActivity: RufloPublicActivity = {
       id: `${stored.id}-planning`,
@@ -188,7 +259,11 @@ router.post("/ruflo/sessions", async (req, res) => {
     };
     const entry: RuntimeEntry = {
       ownerId: userId,
-      model,
+      model: routing.primary.model.id,
+      capability: routing.capability,
+      routing,
+      providerGateway: provider,
+      costTracker,
       projectKey,
       activity: [initialActivity],
       createdAt,
@@ -212,8 +287,11 @@ router.post("/ruflo/sessions", async (req, res) => {
     const run = runRufloSession({
       sessionId: stored.id,
       task,
-      model,
+      model: routing.primary.model.id,
       provider,
+      capability: routing.capability,
+      budget,
+      costTracker,
       repository,
       workspace: repository ? undefined : { userId, projectId },
       selectedFiles,
@@ -222,6 +300,7 @@ router.post("/ruflo/sessions", async (req, res) => {
         const current = runtimeSessions.get(session.id);
         if (!current) return;
         current.session = session;
+        current.usage = costTracker.getSessionTotals(session.id);
         const seen = persistedEvents.get(session.id) ?? new Set<string>();
         for (const event of session.events) {
           if (seen.has(event.id)) continue;
@@ -268,7 +347,7 @@ router.post("/ruflo/sessions", async (req, res) => {
             },
             createProposal: (delegation) => createRufloProposal({
               provider,
-              model,
+              model: routing.primary.model.id,
               session: {
                 ...session,
                 task: delegation.task,
@@ -281,6 +360,7 @@ router.post("/ruflo/sessions", async (req, res) => {
             }),
           });
           current.agentExecutions = preparation.executions;
+          current.usage = costTracker.getSessionTotals(session.id);
           current.proposalAgent = preparation.coder;
           current.proposal = preparation.coder.output!.proposal;
           current.proposalStatus = "ready";
@@ -384,7 +464,7 @@ router.post("/ruflo/sessions/:sessionId/execute", async (req, res) => {
           return { status: result.status, summary: result.summary };
         }
         const result = await validateAppliedProposal(
-          providerManager.getProvider(registered.provider ?? "groq"),
+          entry.providerGateway,
           proposal.proposalId,
         );
         return { status: result.status, summary: result.summary };
@@ -394,7 +474,7 @@ router.post("/ruflo/sessions/:sessionId/execute", async (req, res) => {
         entry,
         diagnosis,
         attempt,
-        providerId: registered.provider ?? "groq",
+        provider: entry.providerGateway,
         model: entry.model,
         repository: registered.repository,
         workspace: registered.workspaceRoot ? { userId, projectId: registered.projectId ?? "default" } : undefined,
@@ -406,6 +486,7 @@ router.post("/ruflo/sessions/:sessionId/execute", async (req, res) => {
     entry.validation = workflow.validation;
     entry.workflowMessage = workflow.message;
     entry.agentExecutions = workflow.agentExecutions;
+    entry.usage = entry.costTracker.getSessionTotals(req.params.sessionId);
     entry.proposalAgent = workflow.proposalAgent ?? entry.proposalAgent;
     if (workflow.proposal) {
       entry.proposal = workflow.proposal;
@@ -600,6 +681,21 @@ router.get("/ruflo/sessions/:sessionId", async (req, res) => {
     recoveryAttempts: 0,
     maxRecoveryAttempts: MAX_RUFLO_RECOVERY_ATTEMPTS,
     agentExecutions: [],
+    capability: "medium",
+    routing: {
+      primary: { provider: "unknown", model: "unknown" },
+      fallbacks: [],
+      reason: "Persisted session metadata is not available after the live runtime expires.",
+    },
+    usage: {
+      sessionId: stored.id,
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costStatus: "unknown",
+      providerModels: [],
+    },
   } satisfies RufloPublicSession);
 });
 
@@ -632,6 +728,16 @@ function publicSession(id: string, entry: RuntimeEntry): RufloPublicSession {
     proposalAgent: entry.proposalAgent ? publicAgentExecution(entry.proposalAgent) : undefined,
     createdAt: entry.createdAt,
     updatedAt: session?.updatedAt ?? entry.createdAt,
+    capability: entry.capability,
+    routing: {
+      primary: { provider: entry.routing.primary.provider.id, model: entry.routing.primary.model.id },
+      fallbacks: entry.routing.fallbacks.map((candidate) => ({
+        provider: candidate.provider.id,
+        model: candidate.model.id,
+      })),
+      reason: entry.routing.reason,
+    },
+    usage: entry.costTracker.getSessionTotals(id),
   };
 }
 
@@ -680,7 +786,7 @@ async function createRufloFixProposal(input: {
   entry: RuntimeEntry;
   diagnosis: string;
   attempt: number;
-  providerId: "groq" | "gemini";
+  provider: import("../ai/ai-provider").AiProvider;
   model: string;
   repository?: RepositoryRef;
   workspace?: { userId: string; projectId: string };
@@ -697,13 +803,32 @@ async function createRufloFixProposal(input: {
     proposalReady: true,
   };
   return createRufloProposal({
-    provider: providerManager.getProvider(input.providerId),
+    provider: input.provider,
     model: input.model,
     session: fixSession,
     repository: input.repository,
     ownerId: input.ownerId,
     workspace: input.workspace,
   });
+}
+
+function isRufloCapability(value: unknown): value is RufloCapabilityClass {
+  return value === "light" || value === "medium" || value === "heavy";
+}
+
+function parseBudget(value: unknown): Partial<RufloBudgetLimits> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const input = value as Record<string, unknown>;
+  const numberValue = (key: keyof RufloBudgetLimits): number | undefined =>
+    typeof input[key] === "number" && Number.isFinite(input[key]) ? input[key] as number : undefined;
+  return {
+    maxInputTokens: numberValue("maxInputTokens"),
+    maxOutputTokens: numberValue("maxOutputTokens"),
+    maxSessionTokens: numberValue("maxSessionTokens"),
+    maxSessionCostUsd: numberValue("maxSessionCostUsd"),
+    maxRequestCostUsd: numberValue("maxRequestCostUsd"),
+    maxProviderRetries: numberValue("maxProviderRetries"),
+  };
 }
 
 function activityForEvent(event: RufloEvent): RufloPublicActivity | undefined {

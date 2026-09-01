@@ -12,6 +12,9 @@ export interface AiModel {
   provider: "groq" | "gemini";
   capabilities: string[];
   contextWindow: number | null;
+  capabilityClasses?: Array<"light" | "medium" | "heavy">;
+  strength?: number;
+  costTier?: "low" | "medium" | "high";
   enabled: boolean;
   recommended: boolean;
 }
@@ -21,13 +24,22 @@ export interface AiChatRequest {
   messages: AiChatMessage[];
   temperature?: number | null;
   role?: AiRequestRole;
+  maxOutputTokens?: number | null;
 }
+
+export type AiUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  exact: boolean;
+};
 
 export interface AiChatResponse {
   id: string;
   model: string;
   content: string;
   provider: "groq" | "gemini";
+  usage?: AiUsage;
 }
 
 export interface ProviderHealth {

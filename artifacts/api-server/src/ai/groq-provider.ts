@@ -19,6 +19,11 @@ type GroqResponse = {
   id?: string;
   model?: string;
   choices?: GroqChoice[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 };
 
 export class GroqProvider implements AiProvider {
@@ -138,6 +143,7 @@ export class GroqProvider implements AiProvider {
           model: request.model,
           messages: request.messages,
           temperature: request.temperature ?? undefined,
+          max_tokens: request.maxOutputTokens ?? undefined,
           stream,
         }),
         signal: controller.signal,
@@ -250,8 +256,19 @@ export class GroqProvider implements AiProvider {
       model: result.model ?? "unknown",
       content: result.choices?.[0]?.message?.content ?? "",
       provider: "groq",
+      usage: result.usage && toUsage(result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens),
     };
   }
+}
+
+function toUsage(inputTokens?: number, outputTokens?: number, totalTokens?: number) {
+  if (![inputTokens, outputTokens, totalTokens].every((value) => Number.isFinite(value))) return undefined;
+  return {
+    inputTokens: Math.max(0, Math.floor(inputTokens!)),
+    outputTokens: Math.max(0, Math.floor(outputTokens!)),
+    totalTokens: Math.max(0, Math.floor(totalTokens!)),
+    exact: true,
+  };
 }
 
 export type GroqProviderErrorCode =

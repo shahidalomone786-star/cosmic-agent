@@ -17,6 +17,10 @@ export class ProviderManager {
     return provider;
   }
 
+  getProviders(): AiProvider[] {
+    return [...this.providers];
+  }
+
   getProviderForModel(modelId: string): AiProvider {
     const model = getApprovedModel(modelId);
     if (!model) throw new GroqProviderError("provider_error", "The requested AI model is unavailable.");

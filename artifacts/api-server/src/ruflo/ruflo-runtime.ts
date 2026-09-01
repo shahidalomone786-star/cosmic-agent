@@ -22,6 +22,13 @@ import {
   type RufloPlannerObservation,
 } from "./ruflo-planner";
 import type { RufloAgentExecution, RufloAgentLimits } from "./ruflo-agents";
+import {
+  RufloBudgetLimitError,
+  RufloCostTracker,
+  type RufloBudgetLimits,
+  type RufloCostTotals,
+} from "./ruflo-cost-tracker";
+import type { RufloCapabilityClass } from "./ruflo-provider-router";
 
 export const DEFAULT_RUFLO_LIMITS = {
   maxIterations: 8,
@@ -102,7 +109,8 @@ export type RufloRuntimeError = {
     | "tool_failure"
     | "iteration_limit"
     | "tool_call_limit"
-    | "runtime_limit";
+    | "runtime_limit"
+    | "budget_limit";
   message: string;
   cause?: string;
 };
@@ -128,6 +136,9 @@ export type RufloSession = {
   agentLimits: RufloAgentLimits;
   createdAt: string;
   updatedAt: string;
+  capability?: RufloCapabilityClass;
+  budget?: RufloBudgetLimits;
+  usage?: RufloCostTotals;
 };
 
 export type RufloRunInput = {
@@ -136,6 +147,9 @@ export type RufloRunInput = {
   model: string;
   provider: AiProvider;
   fallbackProviders?: AiProvider[];
+  capability?: RufloCapabilityClass;
+  budget?: Partial<RufloBudgetLimits>;
+  costTracker?: RufloCostTracker;
   repository?: RepositoryRef;
   workspace?: RufloWorkspaceRef;
   selectedFiles?: string[];
@@ -180,6 +194,7 @@ export async function runRufloSession(input: RufloRunInput): Promise<RufloSessio
   const tools = input.tools ?? createRufloToolExecutor();
   const providers = uniqueProviders([input.provider, ...(input.fallbackProviders ?? [])]);
   const publish = () => {
+    if (input.costTracker) session.usage = input.costTracker.getSessionTotals(session.id);
     try {
       input.onUpdate?.(session);
     } catch {
@@ -190,7 +205,7 @@ export async function runRufloSession(input: RufloRunInput): Promise<RufloSessio
 
   const elapsed = () => Math.max(0, nowMs() - startedAt);
   const stopForLimit = (code: RufloRuntimeError["code"], message: string): RufloSession => {
-    session.status = code === "runtime_limit" || code === "iteration_limit" || code === "tool_call_limit"
+    session.status = code === "runtime_limit" || code === "iteration_limit" || code === "tool_call_limit" || code === "budget_limit"
       ? "limit_reached"
       : "failed";
     session.error = { code, message };
@@ -223,6 +238,9 @@ export async function runRufloSession(input: RufloRunInput): Promise<RufloSessio
     if (error instanceof RufloRuntimeDeadlineError) {
       return stopForLimit("runtime_limit", error.message);
     }
+      if (error instanceof RufloBudgetLimitError) {
+        return stopForLimit("budget_limit", error.message);
+      }
     return failSession(session, "planner_failure", error, nowMs);
   }
 
@@ -256,6 +274,9 @@ export async function runRufloSession(input: RufloRunInput): Promise<RufloSessio
     } catch (error) {
       if (error instanceof RufloRuntimeDeadlineError) {
         return stopForLimit("runtime_limit", error.message);
+      }
+      if (error instanceof RufloBudgetLimitError) {
+        return stopForLimit("budget_limit", error.message);
       }
       return failSession(session, "planner_failure", error, nowMs, publish);
     }
@@ -436,6 +457,9 @@ function createSession(task: string, input: RufloRunInput, limits: RufloLimits):
       maxRetries: limits.maxRetries,
       maxTotalIterations: limits.maxTotalIterations,
     },
+    capability: input.capability,
+    budget: input.budget ? { ...input.budget } as RufloBudgetLimits : undefined,
+    usage: input.costTracker?.getSessionTotals(input.sessionId ?? ""),
     createdAt: timestamp,
     updatedAt: timestamp,
   };
