@@ -29,6 +29,7 @@ import {
   type RufloCostTotals,
 } from "./ruflo-cost-tracker";
 import type { RufloCapabilityClass } from "./ruflo-provider-router";
+import { createDefaultRufloToolRegistry, type RufloToolRegistry } from "./ruflo-tool-registry";
 
 export const DEFAULT_RUFLO_LIMITS = {
   maxIterations: 8,
@@ -362,12 +363,17 @@ export async function runRufloSession(input: RufloRunInput): Promise<RufloSessio
   }
 }
 
-export function createRufloToolExecutor(): RufloToolExecutor {
+export function createRufloToolExecutor(registry: RufloToolRegistry = createDefaultRufloToolRegistry()): RufloToolExecutor {
   return {
     async execute(request): Promise<RufloToolResult> {
       if (!request.repository && !request.workspace) {
         throw new RufloRuntimeInputError("A connected repository or workspace is required for Ruflo inspection.");
       }
+      registry.authorize(request.name, request.input, {
+        permissions: ["repository:read", "workspace:read"],
+        allowLowRisk: false,
+        approved: false,
+      });
 
       if (request.name === "inspect_repository") {
         if (request.repository) {

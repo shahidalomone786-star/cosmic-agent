@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
 import { requireAuthenticatedUser } from "../middlewares/auth-middleware";
 import { providerManager } from "../ai/provider-manager";
-import { runRufloSession, type RufloEvent, type RufloSession } from "../ruflo/ruflo-runtime";
+import { createRufloToolExecutor, runRufloSession, type RufloEvent, type RufloSession } from "../ruflo/ruflo-runtime";
 import { rufloSessionStore } from "../ruflo/database-session-store";
 import type { RepositoryRef } from "../repository/github-provider";
 import type { ChangeProposal } from "../ai/change-proposal";
@@ -39,6 +39,14 @@ import {
   type RufloBudgetLimits,
   type RufloCostTotals,
 } from "../ruflo/ruflo-cost-tracker";
+import { createDefaultRufloToolRegistry } from "../ruflo/ruflo-tool-registry";
+import {
+  RufloMcpManager,
+  RufloMcpManagerError,
+  type RufloMcpScope,
+  type RufloMcpToolPolicy,
+} from "../ruflo/ruflo-mcp-manager";
+import type { RufloMcpTransportConfiguration } from "../ruflo/ruflo-mcp-client";
 
 type RufloPublicActivity = {
   id: string;
@@ -140,6 +148,11 @@ const runtimeSessions = new Map<string, RuntimeEntry>();
 const persistedEvents = new Map<string, Set<string>>();
 const rufloExecutionLocks = new Set<string>();
 const rufloModelRouter = new RufloModelRouter(providerManager.getProviders());
+const rufloToolRegistry = createDefaultRufloToolRegistry();
+const rufloMcpManager = new RufloMcpManager({
+  registry: rufloToolRegistry,
+  isSessionOwned: (userId, sessionId) => runtimeSessions.get(sessionId)?.ownerId === userId,
+});
 
 router.use((req, res, next) => requireAuthenticatedUser(req, res) ? next() : undefined);
 
@@ -161,6 +174,76 @@ router.get("/ruflo/providers", (_req, res) => {
     })),
     unsupportedProviders: ["openai", "anthropic", "cohere", "ollama"],
   });
+});
+
+router.get("/ruflo/tools", (_req, res) => {
+  res.json({
+    tools: rufloToolRegistry.list().map((tool) => ({
+      ...tool,
+      inputSchema: tool.inputSchema,
+      outputSchema: tool.outputSchema,
+    })),
+  });
+});
+
+router.get("/ruflo/mcp/servers", (req, res) => {
+  const projectId = typeof req.query.projectId === "string" ? req.query.projectId.trim().slice(0, 80) : undefined;
+  res.json({ servers: rufloMcpManager.list(req.authUser!.id, projectId).map(publicMcpConfiguration) });
+});
+
+router.post("/ruflo/mcp/servers", (req, res) => {
+  try {
+    const configuration = rufloMcpManager.configure(parseMcpConfiguration(req.authUser!.id, req.body));
+    res.status(201).json({ server: publicMcpConfiguration(configuration) });
+  } catch (error) {
+    sendMcpError(res, error);
+  }
+});
+
+router.post("/ruflo/mcp/servers/:serverName/discover", async (req, res) => {
+  try {
+    const tools = await rufloMcpManager.discover(req.authUser!.id, req.params.serverName);
+    res.json({ tools: tools.map(publicMcpTool) });
+  } catch (error) {
+    sendMcpError(res, error);
+  }
+});
+
+router.post("/ruflo/mcp/servers/:serverName/enable", async (req, res) => {
+  try {
+    const enabled = req.body?.enabled !== false;
+    const server = await rufloMcpManager.setEnabled(req.authUser!.id, req.params.serverName, enabled);
+    res.json({ server: publicMcpConfiguration(server) });
+  } catch (error) {
+    sendMcpError(res, error);
+  }
+});
+
+router.post("/ruflo/mcp/tools/:toolId/approve", (req, res) => {
+  try {
+    const approval = rufloMcpManager.approveTool({
+      userId: req.authUser!.id,
+      sessionId: stringBody(req.body?.sessionId),
+      taskId: optionalString(req.body?.taskId),
+      toolId: decodeURIComponent(req.params.toolId),
+      input: req.body?.input,
+    });
+    res.status(201).json(approval);
+  } catch (error) {
+    sendMcpError(res, error);
+  }
+});
+
+router.post("/ruflo/mcp/tools/:toolId/execute", async (req, res) => {
+  const result = await rufloMcpManager.executeTool({
+    userId: req.authUser!.id,
+    sessionId: stringBody(req.body?.sessionId),
+    taskId: optionalString(req.body?.taskId),
+    toolId: decodeURIComponent(req.params.toolId),
+    input: req.body?.input,
+    approvalId: optionalString(req.body?.approvalId),
+  });
+  res.status(result.ok ? 200 : result.error.category === "approval_required" ? 428 : result.error.category === "session_unauthorized" ? 403 : 422).json(result);
 });
 
 router.get("/ruflo/memory", async (req, res) => {
@@ -289,6 +372,7 @@ router.post("/ruflo/sessions", async (req, res) => {
       task,
       model: routing.primary.model.id,
       provider,
+      tools: createRufloToolExecutor(rufloToolRegistry),
       capability: routing.capability,
       budget,
       costTracker,
@@ -829,6 +913,150 @@ function parseBudget(value: unknown): Partial<RufloBudgetLimits> | undefined {
     maxRequestCostUsd: numberValue("maxRequestCostUsd"),
     maxProviderRetries: numberValue("maxProviderRetries"),
   };
+}
+
+function parseMcpConfiguration(ownerId: string, value: unknown): {
+  ownerId: string;
+  serverName: string;
+  scope: RufloMcpScope;
+  transport: RufloMcpTransportConfiguration;
+  enabled: boolean;
+  allowedTools: string[];
+  toolPolicies: Record<string, RufloMcpToolPolicy>;
+  permissions: Array<"repository:read" | "workspace:read" | "mcp:read" | "mcp:write" | "network:outbound">;
+  timeoutMs: number;
+  autoApproveLowRisk: boolean;
+} {
+  if (!isRecord(value) || !isRecord(value.transport)) {
+    throw new RufloMcpManagerError("invalid_configuration", "MCP server configuration is invalid.");
+  }
+  const transportValue = value.transport;
+  let transport: RufloMcpTransportConfiguration;
+  if (transportValue.type === "stdio" && typeof transportValue.command === "string" && Array.isArray(transportValue.args)) {
+    transport = {
+      type: "stdio",
+      command: transportValue.command,
+      args: transportValue.args.filter((item): item is string => typeof item === "string"),
+    };
+  } else if (transportValue.type === "streamable-http" && typeof transportValue.url === "string") {
+    transport = { type: "streamable-http", url: transportValue.url };
+  } else {
+    throw new RufloMcpManagerError("invalid_configuration", "Only stdio and streamable HTTP MCP transports are supported.");
+  }
+  const scope: RufloMcpScope = isRecord(value.scope) && value.scope.type === "project" && typeof value.scope.projectId === "string"
+    ? { type: "project", projectId: value.scope.projectId }
+    : { type: "user" };
+  const allowedTools = Array.isArray(value.allowedTools)
+    ? value.allowedTools.filter((item): item is string => typeof item === "string")
+    : [];
+  const permissions = Array.isArray(value.permissions)
+    ? value.permissions.filter(isMcpPermission)
+    : ["mcp:read" as const];
+  const toolPolicies: Record<string, RufloMcpToolPolicy> = {};
+  if (isRecord(value.toolPolicies)) {
+    for (const [name, rawPolicy] of Object.entries(value.toolPolicies)) {
+      if (!isRecord(rawPolicy) || !isMcpRisk(rawPolicy.riskLevel) || !Array.isArray(rawPolicy.permissions)) continue;
+      const policyPermissions = rawPolicy.permissions.filter(isMcpPermission);
+      if (!policyPermissions.length) continue;
+      toolPolicies[name] = {
+        riskLevel: rawPolicy.riskLevel,
+        permissions: policyPermissions,
+        approvalRequired: rawPolicy.approvalRequired === true,
+        outputSchema: isRecord(rawPolicy.outputSchema) ? rawPolicy.outputSchema as RufloMcpToolPolicy["outputSchema"] : undefined,
+      };
+    }
+  }
+  return {
+    ownerId,
+    serverName: typeof value.serverName === "string" ? value.serverName : "",
+    scope,
+    transport,
+    enabled: value.enabled === true,
+    allowedTools,
+    toolPolicies,
+    permissions,
+    timeoutMs: typeof value.timeoutMs === "number" ? value.timeoutMs : 12_000,
+    autoApproveLowRisk: value.autoApproveLowRisk === true,
+  };
+}
+
+function publicMcpConfiguration(configuration: {
+  serverName: string;
+  scope: RufloMcpScope;
+  transport: RufloMcpTransportConfiguration;
+  enabled: boolean;
+  allowedTools: string[];
+  permissions: string[];
+  timeoutMs: number;
+  autoApproveLowRisk: boolean;
+}): unknown {
+  return {
+    serverName: configuration.serverName,
+    scope: configuration.scope,
+    transport: configuration.transport,
+    enabled: configuration.enabled,
+    allowedTools: configuration.allowedTools,
+    permissions: configuration.permissions,
+    timeoutMs: configuration.timeoutMs,
+    autoApproveLowRisk: configuration.autoApproveLowRisk,
+  };
+}
+
+function publicMcpTool(tool: {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+  serverName?: string;
+  inputSchema: unknown;
+  outputSchema?: unknown;
+  permissions: string[];
+  riskLevel: string;
+  timeoutMs: number;
+  enabled: boolean;
+  approvalRequired: boolean;
+}): unknown {
+  return {
+    id: tool.id,
+    name: tool.name,
+    description: tool.description,
+    source: tool.source,
+    serverName: tool.serverName,
+    inputSchema: tool.inputSchema,
+    outputSchema: tool.outputSchema,
+    permissions: tool.permissions,
+    riskLevel: tool.riskLevel,
+    timeoutMs: tool.timeoutMs,
+    enabled: tool.enabled,
+    approvalRequired: tool.approvalRequired,
+  };
+}
+
+function sendMcpError(res: { status: (status: number) => { json: (value: unknown) => void } }, error: unknown): void {
+  const code = error instanceof RufloMcpManagerError ? error.code : "invalid_configuration";
+  const status = code === "session_unauthorized" ? 403 : code === "approval_required" ? 428 : code === "server_not_found" || code === "tool_not_found" ? 404 : 422;
+  res.status(status).json({ error: error instanceof Error ? error.message.slice(0, 500) : "MCP request failed.", code });
+}
+
+function stringBody(value: unknown): string {
+  return typeof value === "string" ? value.trim().slice(0, 120) : "";
+}
+
+function optionalString(value: unknown): string | undefined {
+  const parsed = stringBody(value);
+  return parsed || undefined;
+}
+
+function isMcpPermission(value: unknown): value is "repository:read" | "workspace:read" | "mcp:read" | "mcp:write" | "network:outbound" {
+  return ["repository:read", "workspace:read", "mcp:read", "mcp:write", "network:outbound"].includes(String(value));
+}
+
+function isMcpRisk(value: unknown): value is "READ_ONLY" | "LOW" | "MEDIUM" | "HIGH" | "DESTRUCTIVE" {
+  return ["READ_ONLY", "LOW", "MEDIUM", "HIGH", "DESTRUCTIVE"].includes(String(value));
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function activityForEvent(event: RufloEvent): RufloPublicActivity | undefined {

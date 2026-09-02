@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "test:ruflo-workflow": "pnpm exec esbuild src/ruflo/ruflo-workflow.ts --bundle --platform=node --format=cjs --external:pino --external:pino-pretty --outfile=test-dist/ruflo-workflow.cjs && node --test test/ruflo-workflow.test.mjs test/ruflo-agents.test.mjs",
+    "test:ruflo-mcp": "pnpm exec esbuild src/ruflo/ruflo-tool-registry.ts --bundle --platform=node --format=esm --outfile=test-dist/ruflo-tool-registry.mjs && pnpm exec esbuild src/ruflo/ruflo-mcp-client.ts --bundle --platform=node --format=esm --outfile=test-dist/ruflo-mcp-client.mjs && pnpm exec esbuild src/ruflo/ruflo-mcp-manager.ts --bundle --platform=node --format=esm --outfile=test-dist/ruflo-mcp-manager.mjs && node --test test/ruflo-mcp.test.mjs",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
