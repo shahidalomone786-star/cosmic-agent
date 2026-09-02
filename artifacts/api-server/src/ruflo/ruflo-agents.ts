@@ -3,7 +3,16 @@ import type { ChangeProposal } from "../ai/change-proposal";
 import type { RufloSession } from "./ruflo-runtime";
 import type { RufloPlan } from "./ruflo-planner";
 
-export type RufloAgentRole = "planner" | "coder" | "reviewer" | "validator" | "fixer";
+export type RufloAgentRole =
+  | "planner"
+  | "coder"
+  | "reviewer"
+  | "validator"
+  | "fixer"
+  | "test_generator"
+  | "documentation"
+  | "git_intelligence"
+  | "browser";
 export type RufloAgentStatus = "completed" | "failed";
 
 export type RufloAgentLimits = {

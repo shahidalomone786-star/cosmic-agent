@@ -4,7 +4,7 @@ import { requireAuthenticatedUser } from "../middlewares/auth-middleware";
 import { providerManager } from "../ai/provider-manager";
 import { createRufloToolExecutor, runRufloSession, type RufloEvent, type RufloSession } from "../ruflo/ruflo-runtime";
 import { rufloSessionStore } from "../ruflo/database-session-store";
-import type { RepositoryRef } from "../repository/github-provider";
+import { getRepositoryOverview, readRepositoryFile, type RepositoryRef, type RepositoryFileCategory } from "../repository/github-provider";
 import type { ChangeProposal } from "../ai/change-proposal";
 import { createRufloProposal } from "../ruflo/ruflo-proposal";
 import {
@@ -21,10 +21,11 @@ import {
 import { validateLocalWorkspace } from "../workspace/local-validation";
 import { validateAppliedProposal } from "../ai/validator-runtime";
 import { runRufloPostApproval, type RufloWorkflowPhase, MAX_RUFLO_RECOVERY_ATTEMPTS } from "../ruflo/ruflo-workflow";
-import { runRufloPreparationAgents, type RufloAgentExecution, type RufloProposalOutput } from "../ruflo/ruflo-agents";
+import { runRufloPreparationAgents, type RufloAgentExecution, type RufloAgentRole, type RufloProposalOutput } from "../ruflo/ruflo-agents";
 import { assertRemoteHeadMatches, GitHubWriteProviderError, githubWriteProvider } from "../repository/github-write-provider";
 import { formatMemoryContext, projectMemoryKey, rufloMemoryStore } from "../ruflo/memory-store";
 import { extractRufloLearning } from "../ruflo/memory-learning";
+import { inspectWorkspace, readWorkspaceFile } from "../workspace/local-workspace";
 import type { RufloMemory, RufloMemoryKind } from "../ruflo/types";
 import {
   RufloModelRouter,
@@ -47,6 +48,22 @@ import {
   type RufloMcpToolPolicy,
 } from "../ruflo/ruflo-mcp-manager";
 import type { RufloMcpTransportConfiguration } from "../ruflo/ruflo-mcp-client";
+import {
+  canReadRufloSession,
+  rufloLiveEventHub,
+  type RufloLiveEventType,
+  type RufloLiveStatus,
+} from "../ruflo/ruflo-live-events";
+import {
+  runRufloSpecializedDag,
+  selectRufloSpecializedAgents,
+  type RufloBrowserAction,
+  type RufloSpecializedAgentRole,
+  type RufloSpecializedInspection,
+  type RufloSpecializedInspectionFile,
+  type RufloSpecializedInspectRequest,
+} from "../ruflo/ruflo-specialized-agents";
+import { InMemoryRufloJobStore, RufloJobManager, type RufloJobRecord } from "../ruflo/ruflo-jobs";
 
 type RufloPublicActivity = {
   id: string;
@@ -60,6 +77,10 @@ type RufloPublicActivity = {
     | "Reviewing"
     | "Validating"
     | "Fixing"
+     | "Testing"
+     | "Documentation"
+     | "Git Intelligence"
+     | "Browser"
     | "Waiting for Approval"
     | "Applying"
     | "GitHub"
@@ -80,7 +101,18 @@ type RufloPublicSession = {
   status: "running" | "waiting" | "completed" | "failed";
   phase: RufloWorkflowPhase | "inspecting";
   currentLabel: RufloPublicActivity["label"];
-  currentAgent: "Ruflo Manager" | "Planner" | "Coder" | "Reviewer" | "Validator" | "Fixer" | "Human approval";
+  currentAgent:
+    | "Ruflo Manager"
+    | "Planner"
+    | "Coder"
+    | "Reviewer"
+    | "Validator"
+    | "Fixer"
+    | "Test Generator"
+    | "Documentation"
+    | "Git Intelligence"
+    | "Browser"
+    | "Human approval";
   activity: RufloPublicActivity[];
   plan: string[];
   affectedFiles: string[];
@@ -105,11 +137,35 @@ type RufloPublicSession = {
     reason: string;
   };
   usage: RufloCostTotals;
+  tasks: RufloPublicTask[];
+  agents: RufloPublicAgent[];
+  executionWaves: Array<{ id: string; label: string; taskIds: string[]; status: "pending" | "active" | "complete" | "failed" }>;
+  memory: { factCount: number; bounded: boolean; status: "available" | "empty" | "unavailable" };
+  specializedAgents: RufloSpecializedAgentRole[];
+  specializedProposals: ChangeProposal[];
+  jobs: string[];
+};
+
+type RufloPublicTask = {
+  id: string;
+  title: string;
+  status: "pending" | "active" | "complete" | "failed" | "blocked";
+  dependencies: string[];
+  wave: number;
+  retryCount: number;
+};
+
+type RufloPublicAgent = {
+  id: string;
+  role: RufloPublicSession["currentAgent"];
+  status: "idle" | "active" | "complete" | "failed";
+  executionId?: string;
+  attempts?: number;
 };
 
 type RufloPublicAgentExecution = {
   executionId: string;
-  role: "planner" | "coder" | "reviewer" | "validator" | "fixer";
+  role: RufloAgentRole;
   status: "completed" | "failed";
   iteration: number;
   attempts: number;
@@ -141,12 +197,52 @@ type RuntimeEntry = {
   memoryFactCount: number;
   createdAt: string;
   usage?: RufloCostTotals;
+  projectId: string;
+  repository?: RepositoryRef;
+  taskStates: Map<string, RufloPublicTask["status"]>;
+  liveEventIds: Set<string>;
+  specializedAgents: RufloSpecializedAgentRole[];
+  specializedProposals: ChangeProposal[];
+  jobs: string[];
 };
 
 const router: IRouter = Router();
 const runtimeSessions = new Map<string, RuntimeEntry>();
 const persistedEvents = new Map<string, Set<string>>();
 const rufloExecutionLocks = new Set<string>();
+const rufloJobManager = new RufloJobManager({
+  store: new InMemoryRufloJobStore(),
+  maxConcurrentJobs: 2,
+  maxQueuedJobs: 16,
+  defaultMaxRetries: 1,
+  defaultMaxRuntimeMs: 120_000,
+  onState: (job, event) => {
+    const type: RufloLiveEventType = event === "queued"
+      ? "job_queued"
+      : event === "started"
+        ? "job_started"
+        : event === "completed"
+          ? "job_completed"
+          : event === "failed"
+            ? "job_failed"
+            : event === "cancelled"
+              ? "job_cancelled"
+              : "job_retrying";
+    publishLive(job.sessionId, type, event === "failed" ? "failed" : event === "completed" ? "completed" : event === "cancelled" ? "queued" : "running", {
+      jobId: job.id,
+      kind: job.kind,
+      status: job.status,
+      attempts: job.attempts,
+      maxRetries: job.maxRetries,
+      error: job.error,
+    });
+    void rufloSessionStore.createActivity(job.ownerId, {
+      sessionId: job.sessionId,
+      kind: `job_${event}`,
+      message: `Specialized job ${event}`,
+    }).catch(() => undefined);
+  },
+});
 const rufloModelRouter = new RufloModelRouter(providerManager.getProviders());
 const rufloToolRegistry = createDefaultRufloToolRegistry();
 const rufloMcpManager = new RufloMcpManager({
@@ -331,6 +427,18 @@ router.post("/ruflo/sessions", async (req, res) => {
           fallbackUsed: attempt.fallbackUsed,
           failureClass: attempt.classification,
         }, "Ruflo provider route attempt");
+        publishLive(
+          stored.id,
+          attempt.fallbackUsed ? "provider_fallback" : "provider_selected",
+          "running",
+          {
+            provider: attempt.provider,
+            model: attempt.model,
+            capability: attempt.capability,
+            fallbackUsed: attempt.fallbackUsed,
+            classification: attempt.classification,
+          },
+        );
       },
     });
     const createdAt = stored.createdAt.toISOString();
@@ -357,6 +465,13 @@ router.post("/ruflo/sessions", async (req, res) => {
       proposalStatus: "not-created",
       git: { status: repository ? "not-requested" : "not-available", branch: repository?.branch },
       memoryFactCount: memory.length,
+      projectId,
+      repository,
+      taskStates: new Map(),
+      liveEventIds: new Set(),
+      specializedAgents: [],
+      specializedProposals: [],
+      jobs: [],
     };
     runtimeSessions.set(stored.id, entry);
     persistedEvents.set(stored.id, new Set());
@@ -366,6 +481,15 @@ router.post("/ruflo/sessions", async (req, res) => {
       kind: "planning",
       message: "Planning",
     });
+    publishLive(stored.id, "session_started", "running", { phase: "inspecting", capability: routing.capability });
+    if (memory.length) publishLive(stored.id, "memory_retrieved", "running", { count: memory.length, bounded: true });
+    publishLive(stored.id, "provider_selected", "running", {
+      provider: routing.primary.provider.id,
+      model: routing.primary.model.id,
+      capability: routing.capability,
+      fallbackCount: routing.fallbacks.length,
+    });
+    publishLive(stored.id, "agent_started", "active", { role: "Planner" });
 
     const run = runRufloSession({
       sessionId: stored.id,
@@ -385,6 +509,8 @@ router.post("/ruflo/sessions", async (req, res) => {
         if (!current) return;
         current.session = session;
         current.usage = costTracker.getSessionTotals(session.id);
+         publishRuntimeEvents(current, session);
+         publishPlanTaskEvents(current, session);
         const seen = persistedEvents.get(session.id) ?? new Set<string>();
         for (const event of session.events) {
           if (seen.has(event.id)) continue;
@@ -400,6 +526,9 @@ router.post("/ruflo/sessions", async (req, res) => {
           }
         }
         persistedEvents.set(session.id, seen);
+         publishLive(session.id, "session_state", liveStatusForEntry(current), {
+           session: publicLiveSession(publicSession(session.id, current)),
+         });
       },
     });
 
@@ -428,6 +557,12 @@ router.post("/ruflo/sessions", async (req, res) => {
                 timestamp: execution.completedAt,
               });
               void persistActivity(userId, session.id, current.activity.at(-1));
+              publishLive(session.id, execution.status === "failed" ? "agent_failed" : "agent_completed", execution.status === "failed" ? "failed" : "completed", {
+                role: agentRoleLabel(execution.role),
+                executionId: execution.executionId,
+                attempts: execution.attempts,
+                iteration: execution.iteration,
+              });
             },
             createProposal: (delegation) => createRufloProposal({
               provider,
@@ -456,13 +591,30 @@ router.post("/ruflo/sessions", async (req, res) => {
             timestamp: new Date().toISOString(),
           });
           void persistActivity(userId, session.id, current.activity.at(-1));
+          publishLive(session.id, "proposal_created", "waiting", { proposalId: current.proposal?.proposalId, fileCount: current.proposal?.files.length ?? 0 });
+          publishLive(session.id, "approval_requested", "waiting", { proposalId: current.proposal?.proposalId, risk: current.proposal?.risk });
         } catch (error) {
           current.error = proposalError(error);
           markLastActivityFailed(current);
           logger.error({ err: error, sessionId: session.id }, "Ruflo proposal generation failed");
+          publishLive(session.id, "session_failed", "failed", { code: current.error.code, message: current.error.message });
         }
       }
       await rememberRufloSessionFacts(userId, projectKey, session);
+      if (current && current.memoryFactCount < memory.length) {
+        current.memoryFactCount = memory.length;
+        publishLive(session.id, "memory_learned", "completed", { count: current.memoryFactCount, bounded: true });
+      }
+      if (current) {
+        const failed = session.status === "failed" || session.status === "limit_reached" || Boolean(current.error);
+        if (failed) {
+          publishLive(session.id, "session_failed", "failed", { status: session.status, phase: current.phase, usage: current.usage });
+        } else if (current.phase === "waiting_approval") {
+          publishLive(session.id, "session_state", "waiting", { status: session.status, phase: current.phase, usage: current.usage });
+        } else {
+          publishLive(session.id, "session_completed", "completed", { status: session.status, phase: current.phase, usage: current.usage });
+        }
+      }
       const status = session.status === "failed" || session.status === "limit_reached" || current?.error
         ? "failed"
         : current?.phase === "waiting_approval"
@@ -474,6 +626,7 @@ router.post("/ruflo/sessions", async (req, res) => {
       const current = runtimeSessions.get(stored.id);
       if (current) {
         markLastActivityFailed(current);
+        publishLive(stored.id, "session_failed", "failed", { code: "runtime_failure", message: "The Ruflo session stopped unexpectedly." });
       }
       await rufloSessionStore.updateSessionStatus(userId, stored.id, "failed").catch(() => undefined);
     });
@@ -482,6 +635,184 @@ router.post("/ruflo/sessions", async (req, res) => {
   } catch (error) {
     res.status(400).json({ error: publicError(error), code: "ruflo_start_failed" });
   }
+});
+
+router.post("/ruflo/sessions/:sessionId/specialized", async (req, res) => {
+  const userId = req.authUser!.id;
+  const sessionId = req.params.sessionId;
+  const entry = runtimeSessions.get(sessionId);
+  if (!entry || entry.ownerId !== userId || !entry.session) {
+    res.status(404).json({ error: "Ruflo session not found.", code: "not_found" });
+    return;
+  }
+  const task = typeof req.body?.task === "string" && req.body.task.trim()
+    ? req.body.task.trim().slice(0, 2_000)
+    : entry.session.task;
+  const selectedFiles = Array.isArray(req.body?.selectedFiles)
+    ? req.body.selectedFiles.filter((item: unknown): item is string => typeof item === "string").slice(0, 24)
+    : entry.session.selectedFiles.slice(0, 24);
+  const requestedRoles: RufloSpecializedAgentRole[] = Array.isArray(req.body?.roles)
+    ? req.body.roles.filter((role: unknown): role is RufloSpecializedAgentRole =>
+      role === "test_generator" || role === "documentation" || role === "git_intelligence" || role === "browser",
+    ).slice(0, 4)
+    : [];
+  const roles = requestedRoles.length
+    ? [...new Set(requestedRoles)]
+    : entry.session.plan.specializedAgents?.length
+      ? entry.session.plan.specializedAgents
+      : selectRufloSpecializedAgents(task);
+  if (!roles.length) {
+    res.status(400).json({ error: "No specialized Ruflo agent is required for this task.", code: "no_specialized_agent" });
+    return;
+  }
+
+  const browserUrls = Array.isArray(req.body?.urls)
+    ? req.body.urls.filter((item: unknown): item is string => typeof item === "string").slice(0, 8)
+    : [];
+  const browserAllowedOrigins = Array.isArray(req.body?.allowedOrigins)
+    ? req.body.allowedOrigins.filter((item: unknown): item is string => typeof item === "string").slice(0, 8)
+    : [];
+  const browserActions = Array.isArray(req.body?.actions)
+    ? req.body.actions.filter(isBrowserAction).slice(0, 30)
+    : [];
+  const onExecution = (execution: RufloAgentExecution<unknown>) => {
+    entry.agentExecutions = [...entry.agentExecutions, execution].slice(-64);
+    entry.currentAgent = agentRoleLabel(execution.role);
+    if (execution.output && typeof execution.output === "object" && "proposal" in execution.output && execution.output.proposal) {
+      const proposal = execution.output.proposal as ChangeProposal;
+      entry.specializedProposals = [...entry.specializedProposals, proposal].slice(-8);
+      if (!entry.proposal) {
+        entry.proposal = proposal;
+        entry.proposalStatus = "ready";
+        entry.phase = "waiting_approval";
+      }
+      publishLive(sessionId, "proposal_created", "waiting", { proposalId: proposal.proposalId, sourceRole: execution.role });
+    }
+    publishLive(sessionId, execution.status === "failed" ? "agent_failed" : "agent_completed", execution.status === "failed" ? "failed" : "completed", {
+      role: agentRoleLabel(execution.role),
+      executionId: execution.executionId,
+      attempts: execution.attempts,
+      specialized: true,
+      analysis: execution.output && typeof execution.output === "object" && "analysis" in execution.output ? execution.output.analysis : undefined,
+    });
+    const eventType: RufloLiveEventType | undefined = execution.role === "test_generator"
+      ? "test_generation"
+      : execution.role === "documentation"
+        ? "documentation_analysis"
+        : execution.role === "git_intelligence"
+          ? "git_analysis"
+          : "browser_activity";
+    if (eventType) publishLive(sessionId, eventType, execution.status === "failed" ? "failed" : "completed", {
+      role: execution.role,
+      summary: execution.output && typeof execution.output === "object" && "summary" in execution.output ? execution.output.summary : undefined,
+      readFiles: execution.output && typeof execution.output === "object" && "readFiles" in execution.output ? execution.output.readFiles : [],
+      changedFiles: execution.output && typeof execution.output === "object" && "changedFiles" in execution.output ? execution.output.changedFiles : [],
+    });
+  };
+
+  try {
+    const job = await rufloJobManager.enqueue({
+      ownerId: userId,
+      sessionId,
+      kind: "specialized_agents",
+      maxRetries: 1,
+      maxRuntimeMs: 120_000,
+      execute: async ({ signal }) => {
+        for (const role of roles) publishLive(sessionId, "agent_selected", "queued", { role, specialized: true });
+        const result = await runRufloSpecializedDag({
+          sessionId,
+          task,
+          selectedFiles,
+          roles,
+          signal,
+          inspect: (request) => inspectForSpecializedAgent(entry, request, userId),
+          createProposal: (request) => createRufloProposal({
+            provider: entry.providerGateway,
+            model: entry.model,
+            session: {
+              ...entry.session!,
+              task: request.task,
+              selectedFiles: request.paths,
+              context: request.context,
+            },
+            repository: entry.repository,
+            ownerId: userId,
+            workspace: entry.repository ? undefined : { userId, projectId: entry.projectId },
+          }),
+          git: entry.repository
+            ? async () => {
+              const status = await githubWriteProvider.getStatus(entry.repository!, entry.repository!.branch, selectedFiles);
+              const diff = await githubWriteProvider.getDiff(entry.repository!, entry.repository!.branch);
+              return {
+                status: { branch: status.branch, clean: status.clean, stagedFiles: status.stagedFiles },
+                branches: [status.branch],
+                commits: [],
+                diffs: diff.files,
+                changedFiles: diff.files.map((file) => file.path),
+                references: [entry.repository!.webUrl],
+              };
+            }
+            : undefined,
+          browser: {
+            urls: browserUrls,
+            actions: browserActions,
+            allowedOrigins: browserAllowedOrigins,
+          },
+          onAgent: onExecution,
+          onTask: (dagTask) => {
+            const type: RufloLiveEventType = dagTask.status === "in_progress"
+              ? "task_running"
+              : dagTask.status === "completed"
+                ? "task_completed"
+                : dagTask.status === "failed"
+                  ? "task_failed"
+                  : "task_queued";
+            publishLive(sessionId, type, dagTask.status === "completed" ? "completed" : dagTask.status === "failed" ? "failed" : dagTask.status === "in_progress" ? "running" : "queued", {
+              title: dagTask.description,
+              role: dagTask.role,
+              attempts: dagTask.attempts,
+            }, dagTask.taskId);
+          },
+          remember: async ({ kind, fact, sourceTaskId, outcome }) => {
+            await rufloMemoryStore.remember(userId, {
+              projectKey: entry.projectKey,
+              sourceSessionId: sessionId,
+              sourceTaskId,
+              kind,
+              fact,
+              confidence: outcome === "success" ? 0.65 : 0.4,
+              importance: 45,
+              outcome,
+            });
+          },
+        });
+        return { message: result.message, status: result.status, completed: result.completedTaskIds.length, failed: result.failedTaskIds.length };
+      },
+    });
+    entry.specializedAgents = roles;
+    entry.jobs = [...entry.jobs, job.id].slice(-16);
+    res.status(202).json({ job, specializedAgents: roles });
+  } catch (error) {
+    res.status(429).json({ error: publicError(error), code: "specialized_job_rejected" });
+  }
+});
+
+router.get("/ruflo/jobs/:jobId", async (req, res) => {
+  const job = await rufloJobManager.get(req.authUser!.id, req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Ruflo job not found.", code: "not_found" });
+    return;
+  }
+  res.json(job);
+});
+
+router.post("/ruflo/jobs/:jobId/cancel", async (req, res) => {
+  const job = await rufloJobManager.cancel(req.authUser!.id, req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "Ruflo job not found.", code: "not_found" });
+    return;
+  }
+  res.json(job);
 });
 
 router.post("/ruflo/sessions/:sessionId/execute", async (req, res) => {
@@ -510,6 +841,8 @@ router.post("/ruflo/sessions/:sessionId/execute", async (req, res) => {
       res.status(404).json({ error: "Ruflo proposal not found for the authenticated user.", code: "not_found" });
       return;
     }
+    publishLive(req.params.sessionId, "approval_approved", "running", { proposalId });
+    publishLive(req.params.sessionId, "lock_acquired", "active", { scope: "proposal_execution" });
     addPublicActivity(entry, {
       id: `${req.params.sessionId}-applying-${Date.now()}`,
       label: "Applying",
@@ -537,6 +870,12 @@ router.post("/ruflo/sessions/:sessionId/execute", async (req, res) => {
           timestamp: agentExecution.completedAt,
         });
         void persistActivity(userId, req.params.sessionId, entry.activity.at(-1));
+        publishLive(req.params.sessionId, agentExecution.status === "failed" ? "agent_failed" : "agent_completed", agentExecution.status === "failed" ? "failed" : "completed", {
+          role: agentRoleLabel(agentExecution.role),
+          executionId: agentExecution.executionId,
+          attempts: agentExecution.attempts,
+          iteration: agentExecution.iteration,
+        });
       },
       appliedResult: execution,
       validator: async (proposal, appliedResult) => {
@@ -571,6 +910,7 @@ router.post("/ruflo/sessions/:sessionId/execute", async (req, res) => {
     entry.workflowMessage = workflow.message;
     entry.agentExecutions = workflow.agentExecutions;
     entry.usage = entry.costTracker.getSessionTotals(req.params.sessionId);
+    publishLive(req.params.sessionId, "cost_update", liveStatusForEntry(entry), { usage: entry.usage });
     entry.proposalAgent = workflow.proposalAgent ?? entry.proposalAgent;
     if (workflow.proposal) {
       entry.proposal = workflow.proposal;
@@ -582,12 +922,18 @@ router.post("/ruflo/sessions/:sessionId/execute", async (req, res) => {
     if (workflow.status === "completed") {
       markProposalValidated(proposalId, true);
       await rufloSessionStore.updateSessionStatus(userId, req.params.sessionId, "completed");
+      publishLive(req.params.sessionId, "validation_completed", "completed", { status: workflow.validation?.status, summary: workflow.validation?.summary });
+      publishLive(req.params.sessionId, "session_completed", "completed", { phase: workflow.phase, usage: entry.usage });
     } else if (workflow.status === "failed") {
       entry.error = { code: "workflow_failed", message: workflow.message };
       await rufloSessionStore.updateSessionStatus(userId, req.params.sessionId, "failed");
+      publishLive(req.params.sessionId, "validation_failed", "failed", { status: workflow.validation?.status, summary: workflow.validation?.summary });
+      publishLive(req.params.sessionId, "session_failed", "failed", { code: entry.error.code, message: entry.error.message });
     } else {
       await rufloSessionStore.updateSessionStatus(userId, req.params.sessionId, "active");
+      publishLive(req.params.sessionId, "approval_requested", "waiting", { proposalId: workflow.proposal?.proposalId, recoveryAttempts: workflow.recoveryAttempts });
     }
+    publishLive(req.params.sessionId, "lock_released", liveStatusForEntry(entry), { scope: "proposal_execution" });
     res.json({
       ...execution,
       workflow,
@@ -780,6 +1126,13 @@ router.get("/ruflo/sessions/:sessionId", async (req, res) => {
       costStatus: "unknown",
       providerModels: [],
     },
+    tasks: [],
+    agents: [],
+    executionWaves: [],
+    memory: { factCount: 0, bounded: true, status: "empty" },
+     specializedAgents: [],
+     specializedProposals: [],
+     jobs: [],
   } satisfies RufloPublicSession);
 });
 
@@ -822,7 +1175,133 @@ function publicSession(id: string, entry: RuntimeEntry): RufloPublicSession {
       reason: entry.routing.reason,
     },
     usage: entry.costTracker.getSessionTotals(id),
+    tasks: publicTasks(session),
+    agents: publicAgents(entry),
+    executionWaves: publicExecutionWaves(session),
+    memory: { factCount: entry.memoryFactCount, bounded: true, status: entry.memoryFactCount ? "available" : "empty" },
+    specializedAgents: entry.specializedAgents,
+    specializedProposals: entry.specializedProposals,
+    jobs: entry.jobs,
   };
+}
+
+type RufloLiveSnapshot = Omit<RufloPublicSession, "proposal">;
+
+function publicLiveSession(session: RufloPublicSession): RufloLiveSnapshot {
+  const { proposal: _proposal, ...snapshot } = session;
+  return snapshot;
+}
+
+function publicTasks(session?: RufloSession): RufloPublicTask[] {
+  return (session?.plan.steps ?? []).slice(0, 6).map((step, index) => ({
+    id: step.id,
+    title: step.title,
+    status: step.status === "completed" ? "complete" : step.status === "active" ? "active" : "pending",
+    dependencies: index > 0 ? [session!.plan.steps[index - 1]!.id] : [],
+    wave: index,
+    retryCount: 0,
+  }));
+}
+
+function publicExecutionWaves(session?: RufloSession): RufloPublicSession["executionWaves"] {
+  return publicTasks(session).map((task) => ({
+    id: `wave-${task.wave + 1}`,
+    label: `Wave ${task.wave + 1}`,
+    taskIds: [task.id],
+    status: task.status === "complete" ? "complete" : task.status === "active" ? "active" : "pending",
+  }));
+}
+
+function publicAgents(entry: RuntimeEntry): RufloPublicAgent[] {
+  const roles: RufloPublicSession["currentAgent"][] = [
+    "Planner",
+    "Coder",
+    "Reviewer",
+    "Validator",
+    "Fixer",
+    "Test Generator",
+    "Documentation",
+    "Git Intelligence",
+    "Browser",
+  ];
+  return roles.map((role) => {
+    const execution = entry.agentExecutions
+      .filter((item) => agentRoleLabel(item.role) === role)
+      .at(-1);
+    return {
+      id: role.toLowerCase(),
+      role,
+      status: execution
+        ? execution.status === "failed" ? "failed" : "complete"
+        : entry.currentAgent === role ? "active" : "idle",
+      executionId: execution?.executionId,
+      attempts: execution?.attempts,
+    };
+  });
+}
+
+function publishLive(
+  sessionId: string,
+  type: RufloLiveEventType,
+  status: RufloLiveStatus,
+  payload: Record<string, unknown> = {},
+  taskId?: string,
+): void {
+  const entry = runtimeSessions.get(sessionId);
+  const enrichedPayload = entry
+    ? { ...payload, session: publicLiveSession(publicSession(sessionId, entry)) }
+    : payload;
+  rufloLiveEventHub.publish(sessionId, type, status, enrichedPayload, taskId);
+}
+
+function publishRuntimeEvents(entry: RuntimeEntry, session: RufloSession): void {
+  for (const event of session.events) {
+    if (entry.liveEventIds.has(event.id)) continue;
+    entry.liveEventIds.add(event.id);
+    const mapped: { type: RufloLiveEventType; status: RufloLiveStatus } =
+      event.type === "tool_started"
+        ? { type: "tool_started", status: "running" }
+        : event.type === "tool_completed"
+          ? { type: "tool_completed", status: "completed" }
+          : event.type === "tool_failed"
+            ? { type: "tool_failed", status: "failed" }
+            : event.type === "proposal_ready"
+              ? { type: "proposal_created", status: "waiting" }
+              : event.type === "failed" || event.type === "limit_reached"
+                ? { type: "session_failed", status: "failed" }
+                : { type: "session_state", status: liveStatusForEntry(entry) };
+    publishLive(session.id, mapped.type, mapped.status, {
+      runtimeEvent: event.type,
+      message: event.message,
+      iteration: event.iteration,
+      action: session.currentAction,
+    });
+  }
+}
+
+function publishPlanTaskEvents(entry: RuntimeEntry, session: RufloSession): void {
+  for (const task of publicTasks(session)) {
+    const previous = entry.taskStates.get(task.id);
+    if (previous === task.status) continue;
+    entry.taskStates.set(task.id, task.status);
+    const type: RufloLiveEventType = task.status === "active"
+      ? "task_running"
+      : task.status === "complete"
+        ? "task_completed"
+        : "task_queued";
+    publishLive(session.id, type, task.status === "complete" ? "completed" : task.status === "active" ? "running" : "queued", {
+      title: task.title,
+      dependencies: task.dependencies,
+      wave: task.wave,
+    }, task.id);
+  }
+}
+
+function liveStatusForEntry(entry: RuntimeEntry): RufloLiveStatus {
+  if (entry.error || entry.phase === "failed") return "failed";
+  if (entry.phase === "completed") return "completed";
+  if (entry.phase === "waiting_approval") return "waiting";
+  return entry.phase === "inspecting" ? "running" : "active";
 }
 
 function publicAgentExecution(execution: RufloAgentExecution<unknown>): RufloPublicAgentExecution {
@@ -844,6 +1323,18 @@ function updateWorkflowPhase(entry: RuntimeEntry, phase: RufloWorkflowPhase, use
   if (phase === "fixing") entry.currentAgent = "Fixer";
   if (phase === "waiting_approval") entry.currentAgent = "Human approval";
   if (phase === "completed" || phase === "failed") entry.currentAgent = "Ruflo Manager";
+  const phaseEvents: Partial<Record<RufloWorkflowPhase, { type: RufloLiveEventType; status: RufloLiveStatus }>> = {
+    reviewing: { type: "agent_started", status: "active" },
+    validating: { type: "validation_started", status: "active" },
+    fixing: { type: "recovery_started", status: "active" },
+    waiting_approval: { type: "approval_requested", status: "waiting" },
+    completed: { type: "validation_completed", status: "completed" },
+    failed: { type: "validation_failed", status: "failed" },
+  };
+  const livePhaseEvent = phaseEvents[phase];
+  if (livePhaseEvent) {
+    publishLive(sessionId, livePhaseEvent.type, livePhaseEvent.status, { phase, agent: entry.currentAgent });
+  }
   if (phase === "failed") {
     markLastActivityFailed(entry);
     return;
@@ -863,8 +1354,102 @@ function updateWorkflowPhase(entry: RuntimeEntry, phase: RufloWorkflowPhase, use
     status: phase === "completed" ? "complete" : "active",
     timestamp: new Date().toISOString(),
   });
+
   void persistActivity(userId, sessionId, entry.activity.at(-1));
 }
+
+router.get("/ruflo/sessions/:sessionId/events", async (req, res) => {
+  const userId = req.authUser!.id;
+  const sessionId = req.params.sessionId;
+  const entry = runtimeSessions.get(sessionId);
+  const requestedProjectId = optionalString(req.query.projectId);
+  if (entry && !canReadRufloSession(userId, entry.ownerId, requestedProjectId, entry.projectId)) {
+    res.status(404).json({ error: "Ruflo session not found.", code: "not_found" });
+    return;
+  }
+  const stored = entry ? undefined : await rufloSessionStore.getSession(userId, sessionId);
+  if (!entry && !stored) {
+    res.status(404).json({ error: "Ruflo session not found.", code: "not_found" });
+    return;
+  }
+  if (entry && entry.ownerId !== userId) {
+    res.status(404).json({ error: "Ruflo session not found.", code: "not_found" });
+    return;
+  }
+
+  const snapshot = entry
+    ? publicLiveSession(publicSession(sessionId, entry))
+    : publicLiveSession({
+      id: stored!.id,
+      mode: "ruflo",
+      task: stored!.goal,
+      status: stored!.status === "failed" ? "failed" : stored!.status === "completed" ? "completed" : "waiting",
+      phase: stored!.status === "failed" ? "failed" : stored!.status === "completed" ? "completed" : "waiting_approval",
+      currentLabel: "Planning",
+      currentAgent: stored!.status === "completed" ? "Ruflo Manager" : "Human approval",
+      activity: [],
+      plan: [],
+      affectedFiles: [],
+      proposalStatus: "not-created",
+      validationStatus: "not-run",
+      git: { status: "not-available" },
+      memoryFactCount: 0,
+      createdAt: stored!.createdAt.toISOString(),
+      updatedAt: stored!.updatedAt.toISOString(),
+      recoveryAttempts: 0,
+      maxRecoveryAttempts: MAX_RUFLO_RECOVERY_ATTEMPTS,
+      agentExecutions: [],
+      capability: "medium",
+      routing: { primary: { provider: "unknown", model: "unknown" }, fallbacks: [], reason: "Persisted session metadata is not available after the live runtime expires." },
+      usage: { sessionId, requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, costStatus: "unknown", providerModels: [] },
+      tasks: [],
+      agents: [],
+      executionWaves: [],
+      memory: { factCount: 0, bounded: true, status: "empty" },
+      specializedAgents: [],
+      specializedProposals: [],
+      jobs: [],
+    });
+
+  const send = (event: import("../ruflo/ruflo-live-events").RufloLiveEvent) => {
+    if (!res.writableEnded) res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  };
+  let subscription: { unsubscribe: () => void } | undefined;
+  try {
+    const result = rufloLiveEventHub.subscribe(
+      sessionId,
+      typeof req.get("Last-Event-ID") === "string" ? req.get("Last-Event-ID") : undefined,
+      snapshot,
+      send,
+    );
+    subscription = result;
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    res.write("retry: 1500\n\n");
+    for (const event of result.replay) send(event);
+    if (!entry) {
+      const terminalType = snapshot.status === "failed" ? "session_failed" : snapshot.status === "completed" ? "session_completed" : "session_state";
+      const terminalStatus = snapshot.status === "failed" ? "failed" : snapshot.status === "completed" ? "completed" : "waiting";
+      rufloLiveEventHub.publish(sessionId, terminalType, terminalStatus, { session: snapshot });
+    }
+  } catch (error) {
+    res.status(429).json({ error: error instanceof Error ? error.message : "The Ruflo live event connection limit was reached.", code: "live_connection_limit" });
+    return;
+  }
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(`: heartbeat ${new Date().toISOString()}\n\n`);
+  }, 15_000);
+  const close = () => {
+    clearInterval(heartbeat);
+    subscription?.unsubscribe();
+  };
+  req.on("close", close);
+  res.on("close", close);
+});
 
 async function createRufloFixProposal(input: {
   entry: RuntimeEntry;
@@ -1090,6 +1675,10 @@ function agentActivityLabel(role: RufloAgentExecution<unknown>["role"]): RufloPu
     reviewer: "Reviewing",
     validator: "Validating",
     fixer: "Fixing",
+    test_generator: "Testing",
+    documentation: "Documentation",
+    git_intelligence: "Git Intelligence",
+    browser: "Browser",
   };
   return labels[role];
 }
@@ -1111,6 +1700,10 @@ function agentRoleLabel(role: RufloAgentExecution<unknown>["role"]): Exclude<Ruf
     reviewer: "Reviewer",
     validator: "Validator",
     fixer: "Fixer",
+    test_generator: "Test Generator",
+    documentation: "Documentation",
+    git_intelligence: "Git Intelligence",
+    browser: "Browser",
   };
   return labels[role];
 }
@@ -1191,6 +1784,75 @@ async function rememberRufloOutcome(
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim().slice(0, 180) : "";
+}
+
+async function inspectForSpecializedAgent(
+  entry: RuntimeEntry,
+  request: RufloSpecializedInspectRequest,
+  userId: string,
+): Promise<RufloSpecializedInspection> {
+  const requested = [...new Set(request.selectedFiles)].slice(0, request.maxFiles);
+  const files: RufloSpecializedInspectionFile[] = [];
+  if (entry.repository) {
+    const overview = await getRepositoryOverview(entry.repository);
+    const candidates = overview.files
+      .filter((file) => requested.length === 0 || requested.includes(file.path))
+      .filter((file) => request.include.includes(categoryToInspectionKind(file.category)))
+      .slice(0, request.maxFiles);
+    const results = await Promise.allSettled(candidates.map((file) => readRepositoryFile(entry.repository!, file.path)));
+    results.forEach((result, index) => {
+      if (result.status !== "fulfilled") return;
+      const file = candidates[index]!;
+      files.push({
+        path: result.value.path,
+        kind: categoryToInspectionKind(file.category),
+        content: result.value.content.slice(0, 12_000),
+      });
+    });
+    return {
+      files,
+      projectStructure: overview.directories.slice(0, 80).join("\n"),
+      apiBehavior: overview.apiFiles.slice(0, 40).join("\n"),
+      references: [entry.repository.webUrl, ...overview.entryPoints.slice(0, 20)],
+    };
+  }
+
+  const inspection = await inspectWorkspace(userId, entry.projectId, requested, request.task);
+  const candidates = [...new Set([...requested, ...inspection.relevantFiles])].slice(0, request.maxFiles);
+  const results = await Promise.allSettled(candidates.map((path) => readWorkspaceFile(userId, entry.projectId, path)));
+  results.forEach((result, index) => {
+    if (result.status !== "fulfilled") return;
+    const path = result.value.path;
+    const kind = workspacePathKind(path);
+    if (request.include.includes(kind)) files.push({ path, kind, content: result.value.content.slice(0, 12_000) });
+  });
+  return {
+    files,
+    projectStructure: inspection.structure.slice(0, 100).map((file) => file.path).join("\n"),
+    references: inspection.entryPoints.slice(0, 20),
+  };
+}
+
+function categoryToInspectionKind(category: RepositoryFileCategory): RufloSpecializedInspectionFile["kind"] {
+  if (category === "test") return "test";
+  if (category === "documentation") return "documentation";
+  if (category === "configuration" || category === "package") return "configuration";
+  return "source";
+}
+
+function workspacePathKind(path: string): RufloSpecializedInspectionFile["kind"] {
+  if (/(^|\/)(test|tests|__tests__)(\/|$)|\.(test|spec)\.[cm]?[jt]sx?$/.test(path)) return "test";
+  if (/(^|\/)(readme|docs?|documentation)(\/|\.|$)/i.test(path) || /\.(md|mdx|txt)$/i.test(path)) return "documentation";
+  if (/(package\.json|tsconfig|vite\.config|drizzle\.config|\.config\.)/i.test(path)) return "configuration";
+  return "source";
+}
+
+function isBrowserAction(value: unknown): value is RufloBrowserAction {
+  if (!value || typeof value !== "object") return false;
+  const action = value as Record<string, unknown>;
+  return (action.type === "click" || action.type === "fill" || action.type === "press")
+    && (action.selector === undefined || typeof action.selector === "string")
+    && (action.value === undefined || typeof action.value === "string");
 }
 
 function parseRepository(value: unknown): RepositoryRef | undefined {

@@ -1,6 +1,7 @@
 import type { AiProvider } from "../ai/ai-provider";
 import { fitContext } from "../ai/context-budget";
 import type { RepositoryRef } from "../repository/github-provider";
+import { selectRufloSpecializedAgents, type RufloSpecializedAgentRole } from "./ruflo-specialized-agents";
 
 export const MAX_RUFLO_PLAN_STEPS = 6;
 export const MAX_RUFLO_OBSERVATIONS_IN_PROMPT = 8;
@@ -24,6 +25,7 @@ export type RufloPlanStep = {
 export type RufloPlan = {
   goal: string;
   steps: RufloPlanStep[];
+  specializedAgents?: RufloSpecializedAgentRole[];
 };
 
 export type RufloPlannerObservation = {
@@ -100,8 +102,9 @@ export class ModelRufloPlanner implements RufloPlanner {
           content: [
             "You are the Ruflo planner.",
             "Decompose the user's repository task into a small, ordered, read-first plan.",
-            `Return JSON only in this shape: {"steps":[{"id":"string","title":"string","description":"string"}]}.`,
+            `Return JSON only in this shape: {"steps":[{"id":"string","title":"string","description":"string"}],"specializedAgents":["test_generator|documentation|git_intelligence|browser"]}.`,
             `Use at most ${MAX_RUFLO_PLAN_STEPS} steps.`,
+            "Select only the minimum specialized agents required by the user's task. Use test_generator for coverage, documentation for docs, git_intelligence for read-only Git analysis, and browser only for bounded rendered-page checks.",
             "Do not propose writes, apply, commit, push, swarm, memory, or parallel work.",
             "The runtime will execute only bounded read tools and will ask you for one next action at a time.",
           ].join("\n"),
@@ -203,7 +206,13 @@ function parsePlan(content: string, task: string): RufloPlan {
     };
   });
 
-  return { goal: task.slice(0, 2_000), steps };
+  const requestedAgents = Array.isArray(candidate?.specializedAgents)
+    ? candidate.specializedAgents.filter((value): value is RufloSpecializedAgentRole =>
+      value === "test_generator" || value === "documentation" || value === "git_intelligence" || value === "browser",
+    )
+    : [];
+  const selectedAgents = [...new Set([...selectRufloSpecializedAgents(task), ...requestedAgents])].slice(0, 4);
+  return { goal: task.slice(0, 2_000), steps, specializedAgents: selectedAgents };
 }
 
 function parseDecision(content: string): RufloDecision {

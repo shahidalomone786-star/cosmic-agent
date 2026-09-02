@@ -108,7 +108,17 @@ export class RufloDagError extends Error {
   }
 }
 
-const VALID_ROLES = new Set<RufloAgentRole>(["planner", "coder", "reviewer", "validator", "fixer"]);
+const VALID_ROLES = new Set<RufloAgentRole>([
+  "planner",
+  "coder",
+  "reviewer",
+  "validator",
+  "fixer",
+  "test_generator",
+  "documentation",
+  "git_intelligence",
+  "browser",
+]);
 const VALID_PERMISSIONS = new Set<RufloTaskPermission>(["read", "write", "review", "validate", "proposal"]);
 const MAX_CONCURRENT_AGENTS = 5;
 const MAX_TASKS = 32;

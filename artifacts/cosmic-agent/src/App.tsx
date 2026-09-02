@@ -9,6 +9,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import { ChangeProposalReview } from '@/components/change-proposal-review';
 import { PreviewPanel } from '@/components/preview-panel';
+import { acceptRufloLiveEvent, parseRufloSseBlock } from './ruflo-live-client';
 import {
   Aperture, Bot, Check, ChevronDown, CircleAlert, CircleCheck, Code2, Copy, Gauge, LockKeyhole, Menu, MoreHorizontal,
   FileCode2,
@@ -63,7 +64,45 @@ type RufloClientSession = {
   workflowMessage?: string;
   createdAt: string;
   updatedAt: string;
+  capability: string;
+  routing: {
+    primary: { provider: string; model: string };
+    fallbacks: { provider: string; model: string }[];
+    reason: string;
+  };
+  usage: {
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costStatus: string;
+    estimatedCostUsd?: number;
+    providerModels: { provider: string; model: string; requests: number; inputTokens: number; outputTokens: number; totalTokens: number; estimatedCostUsd?: number; costStatus: string }[];
+  };
+  tasks: {
+    id: string;
+    title: string;
+    status: 'pending' | 'active' | 'complete' | 'failed' | 'blocked';
+    dependencies: string[];
+    wave: number;
+    retryCount: number;
+  }[];
+  agents: {
+    id: string;
+    role: string;
+    status: 'idle' | 'active' | 'complete' | 'failed';
+    executionId?: string;
+    attempts?: number;
+  }[];
+  executionWaves: {
+    id: string;
+    label: string;
+    taskIds: string[];
+    status: string;
+  }[];
+  memory: { factCount: number; bounded: boolean; status: string };
 };
+type RufloConnectionState = 'connecting' | 'live' | 'reconnecting' | 'closed' | 'unauthorized';
 type SessionUser = { id: string; email: string };
 type GitHubStatus = { connected: boolean; status: 'connected' | 'invalid' | 'rate_limited' | 'unavailable' | 'not_connected'; lastValidatedAt?: string | null };
 
@@ -238,23 +277,93 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
      return () => { activePoll = false; window.clearInterval(timer); };
    }, [agentSession?.id]);
 
+   const [rufloConnection, setRufloConnection] = useState<RufloConnectionState>('closed');
    useEffect(() => {
-     if (!rufloSession?.id || rufloSession.status !== 'running') return;
-     let activePoll = true;
-     const poll = async () => {
+     const sessionId = rufloSession?.id;
+     if (!sessionId) {
+       setRufloConnection('closed');
+       return;
+     }
+     let cancelled = false;
+     let attempt = 0;
+     let lastEventId = '';
+     let reconnectTimer: number | undefined;
+     let controller: AbortController | undefined;
+     let terminal = false;
+     const refreshSession = async () => {
        try {
-         const latest = await apiJson<RufloClientSession>(`/api/ruflo/sessions/${encodeURIComponent(rufloSession.id)}`);
-          if (activePoll) {
-            setRufloSession(latest);
-            if (latest.proposal) setRufloProposal(latest.proposal);
-          }
+         const latest = await apiJson<RufloClientSession>(`/api/ruflo/sessions/${encodeURIComponent(sessionId)}`);
+         if (!cancelled) {
+           setRufloSession((current) => current?.id === sessionId ? { ...current, ...latest } : latest);
+           if (latest.proposal) setRufloProposal(latest.proposal);
+         }
        } catch {
-         // Keep the last safe activity snapshot visible during a transient poll failure.
+         // The last server snapshot remains visible until the stream recovers.
        }
      };
-     const timer = window.setInterval(() => void poll(), 700);
-     return () => { activePoll = false; window.clearInterval(timer); };
-   }, [rufloSession?.id, rufloSession?.status]);
+     const applyEvent = (event: { id?: string; type?: string; payload?: { session?: Partial<RufloClientSession> } }) => {
+       const snapshot = event.payload?.session;
+       if (snapshot && !cancelled) {
+         setRufloSession((current) => current?.id === sessionId ? { ...current, ...snapshot, proposal: snapshot.proposal ?? current.proposal } as RufloClientSession : current);
+       }
+       if (event.type === 'proposal_created' || event.type === 'approval_requested') void refreshSession();
+       if (event.type === 'session_completed' || event.type === 'session_failed') {
+         terminal = true;
+         controller?.abort();
+         setRufloConnection('closed');
+       }
+     };
+     const parseBlock = (block: string) => {
+       const event = parseRufloSseBlock(block);
+       if (!event || !acceptRufloLiveEvent(lastEventId, event.id)) return;
+       if (event.id) lastEventId = event.id;
+       applyEvent(event);
+     };
+     const connect = async () => {
+       if (cancelled) return;
+       setRufloConnection(attempt ? 'reconnecting' : 'connecting');
+       controller = new AbortController();
+       try {
+         const response = await fetch(`/api/ruflo/sessions/${encodeURIComponent(sessionId)}/events`, {
+           credentials: 'include',
+           headers: lastEventId ? { 'Last-Event-ID': lastEventId } : undefined,
+           signal: controller.signal,
+         });
+         if (response.status === 401 || response.status === 403 || response.status === 404) {
+           setRufloConnection('unauthorized');
+           return;
+         }
+         if (!response.ok || !response.body) throw new Error('The Ruflo live stream is unavailable.');
+         attempt = 0;
+         setRufloConnection('live');
+         const reader = response.body.getReader();
+         const decoder = new TextDecoder();
+         let buffer = '';
+         while (!cancelled) {
+           const chunk = await reader.read();
+           if (chunk.done) break;
+           buffer += decoder.decode(chunk.value, { stream: true });
+           const blocks = buffer.split(/\r?\n\r?\n/);
+           buffer = blocks.pop() ?? '';
+           blocks.forEach(parseBlock);
+         }
+         if (buffer.trim()) parseBlock(buffer);
+       } catch (error) {
+         if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return;
+       }
+       if (!cancelled && !terminal) {
+         const delay = Math.min(10_000, 1_000 * (2 ** Math.min(attempt, 3)));
+         attempt += 1;
+         reconnectTimer = window.setTimeout(() => void connect(), delay);
+       }
+     };
+     void connect();
+     return () => {
+       cancelled = true;
+       controller?.abort();
+       if (reconnectTimer) window.clearTimeout(reconnectTimer);
+     };
+   }, [rufloSession?.id]);
 
   useEffect(() => { localStorage.setItem('cosmic-conversations', JSON.stringify(conversations)); }, [conversations]);
   useEffect(() => { if (repository) localStorage.setItem('cosmic-repository', JSON.stringify(repository)); else localStorage.removeItem('cosmic-repository'); }, [repository]);
@@ -443,7 +552,7 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
      <main className="chat-main">
          <header className="chat-header"><div className="header-title"><button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open conversation history"><Menu size={19} /></button><div><strong>{active?.title ?? 'New conversation'}</strong><span>Private workspace · read-only mode</span></div></div><div className="header-actions">{repository && <button className="context-indicator" onClick={() => setRepositoryOpen(true)}><span className="status-dot" /> {repository.owner}/{repository.name}{contextPaths.length ? ` · ${contextPaths.length} files` : ''}</button>}{previewProposalId && <Link className="preview-toggle" href={`/preview/${encodeURIComponent(previewProposalId)}`}><Eye size={14} /> Preview</Link>}<button className="resource-toggle" onClick={() => setResourceOpen((open) => !open)} aria-label="Toggle resource status"><Activity size={15} /> Resources</button><button className="repo-toggle" onClick={() => setRepositoryOpen((open) => !open)} aria-label="Toggle repository explorer"><GitBranch size={15} /> Repository</button><div className="header-status"><span className="status-dot" /> Ready</div></div></header>
        <div className="message-scroll" ref={scrollRef} onScroll={onScroll}>
-              <div className="message-column">{!active?.messages.length && !proposal && !rufloProposal && !isProposing && !isStartingRuflo && !agentSession && !rufloSession ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{(isProposing || isStartingRuflo) && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>{isStartingRuflo ? 'Starting Ruflo Mode and preparing bounded inspection…' : 'Inspecting the workspace and preparing a safe diff preview…'}</span></div>}{agentSession && <AgentTimeline session={agentSession} model={selectedModel} />}{rufloSession && <RufloActivityPanel session={rufloSession} />}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => { setProposal(null); setAgentSession(null); }} onRegenerate={() => { setProposal(null); setAgentSession(null); setDraft(proposalRequest); }} onApplied={(result) => { recordAppliedEvent(result); setPreviewProposalId(result.proposalId); }} onValidationFailed={(result) => {
+              <div className="message-column">{!active?.messages.length && !proposal && !rufloProposal && !isProposing && !isStartingRuflo && !agentSession && !rufloSession ? <EmptyState onPrompt={(prompt) => setDraft(prompt)} /> : <>{active?.messages.map((message) => <MessageBubble key={message.id} message={message} onRetry={() => retry(message)} onEdit={(text) => setDraft(text)} />)}{(isProposing || isStartingRuflo) && <div className="proposal-loading"><Sparkles size={16} className="spin" /><span>{isStartingRuflo ? 'Starting Ruflo Mode and preparing bounded inspection…' : 'Inspecting the workspace and preparing a safe diff preview…'}</span></div>}{agentSession && <AgentTimeline session={agentSession} model={selectedModel} />}{rufloSession && <RufloActivityPanel session={rufloSession} connection={rufloConnection} />}{proposal && <ChangeProposalReview proposal={proposal} onCancel={() => { setProposal(null); setAgentSession(null); }} onRegenerate={() => { setProposal(null); setAgentSession(null); setDraft(proposalRequest); }} onApplied={(result) => { recordAppliedEvent(result); setPreviewProposalId(result.proposalId); }} onValidationFailed={(result) => {
               const validation = (result as ChangeExecutionResult & { validation?: { checks?: Array<{ details: string }>; summary?: string } }).validation;
               const details = validation?.checks?.map((check) => check.details).join(' ') || validation?.summary || result.message;
               setProposal(null);
@@ -552,30 +661,106 @@ function ActivityPanel({ session }: { session: RuntimeSession }) {
   </section>;
 }
 
-function RufloActivityPanel({ session }: { session: RufloClientSession }) {
+function RufloActivityPanel({ session, connection }: { session: RufloClientSession; connection: RufloConnectionState }) {
   const proposalLabels: Record<RufloClientSession['proposalStatus'], string> = { 'not-created': 'Not created', ready: 'Ready for approval', applied: 'Applied locally', completed: 'Completed' };
   const validationLabels: Record<RufloClientSession['validationStatus'], string> = { 'not-run': 'Not run', pass: 'Passed', fail: 'Failed safely', 'not-verified': 'Not verified' };
   const gitLabels: Record<RufloClientSession['git']['status'], string> = { 'not-available': 'Not available', 'not-requested': 'Not requested', ready: 'Ready for review', committed: 'Committed', pushed: 'Pushed', unavailable: 'Unavailable' };
-  const statusLabel = session.currentLabel;
   const statusTone = session.status === 'failed' ? 'failed' : session.status === 'completed' ? 'complete' : session.phase === 'waiting_approval' ? 'waiting' : 'active';
-  return <section className="ruflo-panel" aria-label="Ruflo activity" data-testid="panel-ruflo-activity">
-    <div className="ruflo-panel-head">
-      <div><span className="agent-panel-kicker"><Activity size={11} /> Ruflo Mode</span><strong>{statusLabel}</strong></div>
-      <span className={`ruflo-status ${statusTone}`}>{statusLabel}</span>
+  const statusCopy = connection === 'live' ? 'Live stream connected' : connection === 'connecting' ? 'Connecting to stream' : connection === 'reconnecting' ? 'Reconnecting to stream' : connection === 'unauthorized' ? 'Stream unavailable' : session.status === 'waiting' ? 'Paused at approval gate' : session.status === 'completed' ? 'Session closed cleanly' : session.status === 'failed' ? 'Stopped safely' : 'Stream closed';
+  const taskMap = new Map(session.tasks.map((task) => [task.id, task]));
+  const completedTasks = session.tasks.filter((task) => task.status === 'complete').length;
+  const activeTasks = session.tasks.filter((task) => task.status === 'active').length;
+  const planPercent = session.tasks.length ? Math.round((completedTasks / session.tasks.length) * 100) : 0;
+  const humanize = (value: string) => value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const formatUsd = (value?: number) => value === undefined ? 'Not metered' : `$${value.toFixed(4)}`;
+  const activityIcon = (status: RufloActivity['status']) => status === 'failed' ? <CircleAlert size={14} /> : status === 'complete' ? <CircleCheck size={14} /> : <LoaderCircle size={14} className="spin" />;
+  const approvalMessage = session.workflowMessage ?? (session.phase === 'waiting_approval'
+    ? 'The proposal is held at the server approval boundary. Nothing is applied from this panel.'
+    : session.phase === 'completed'
+      ? 'Reviewer and validator both passed. Ruflo completed safely.'
+      : session.status === 'failed'
+        ? 'The session stopped safely. No further changes will be attempted.'
+        : 'Ruflo is gathering readable project evidence. Changes remain behind approval.');
+
+  return <section className="ruflo-panel" aria-label="Ruflo live swarm dashboard" data-testid="panel-ruflo-activity">
+    <header className="ruflo-console-head">
+      <div className="ruflo-title-block">
+        <div className="ruflo-title-line"><span className="agent-panel-kicker"><Activity size={11} /> Ruflo / live swarm</span><span className="ruflo-session-id">{session.id}</span></div>
+        <h2>Bounded execution surface</h2>
+        <p>Reviewable agents, readable evidence, and a hard approval boundary.</p>
+      </div>
+      <div className={`ruflo-connection ${statusTone} ${connection}`} aria-label={`Session state: ${statusCopy}`} data-testid="status-ruflo-connection"><span className="ruflo-connection-dot" />{statusCopy}</div>
+    </header>
+
+    <div className="ruflo-mission">
+      <span className="ruflo-eyebrow">Mission task</span>
+      <strong data-testid="text-ruflo-task">{session.task}</strong>
+      <div className="ruflo-mission-meta"><span><Bot size={12} /> {session.currentAgent}</span><span><Gauge size={12} /> {session.currentLabel}</span><span><Code2 size={12} /> {session.capability}</span></div>
     </div>
-    <p className="ruflo-task">{session.task}</p>
-    <div className="ruflo-status-grid" aria-label="Ruflo status">
-      <div><span>Current agent</span><strong>{session.currentAgent}</strong></div>
-      <div><span>Current phase</span><strong>{session.currentLabel}</strong></div>
-      <div><span>Files affected</span><strong>{session.affectedFiles.length || '—'}</strong></div>
-      <div><span>Proposal</span><strong>{proposalLabels[session.proposalStatus]}</strong></div>
-      <div><span>Validation</span><strong>{validationLabels[session.validationStatus]}</strong></div>
-      <div><span>Git status</span><strong>{gitLabels[session.git.status]}{session.git.branch ? ` · ${session.git.branch}` : ''}</strong></div>
+
+    <div className="ruflo-metrics" aria-label="Ruflo session metrics">
+      <div className="ruflo-metric"><span>Tasks complete</span><strong>{completedTasks}<small> / {session.tasks.length || '—'}</small></strong><i><span style={{ width: `${planPercent}%` }} /></i></div>
+      <div className="ruflo-metric"><span>Active agents</span><strong>{session.agents.filter((agent) => agent.status === 'active').length}<small> / {session.agents.length || '—'}</small></strong><em>{activeTasks} active task{activeTasks === 1 ? '' : 's'}</em></div>
+      <div className="ruflo-metric"><span>Files in scope</span><strong>{session.affectedFiles.length || '—'}</strong><em>Server-reported surface</em></div>
+      <div className="ruflo-metric"><span>Recovery budget</span><strong>{session.recoveryAttempts}<small> / {session.maxRecoveryAttempts}</small></strong><em>{session.recoveryAttempts ? 'Attempts used' : 'No recovery needed'}</em></div>
     </div>
-    <div className="ruflo-files" aria-label="Affected files">{session.affectedFiles.length ? session.affectedFiles.map((file) => <span key={file}><FileCode2 size={11} />{file}</span>) : <span className="ruflo-files-empty">No affected files identified yet</span>}</div>
-    <div className="ruflo-activity-list">{session.activity.slice(-6).map((item) => <div className={`ruflo-activity-row ${item.status}`} key={item.id}><span className="ruflo-activity-mark">{item.status === 'failed' ? <CircleAlert size={13} /> : item.status === 'complete' ? <CircleCheck size={13} /> : <LoaderCircle size={13} className="spin" />}</span><strong>{item.label}</strong><time>{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>)}</div>
-    {session.plan.length > 0 && <div className="ruflo-plan"><span className="agent-panel-kicker">Plan</span>{session.plan.map((step) => <span key={step}>{step}</span>)}</div>}
-    <div className={`ruflo-note ${statusTone}`}><ShieldCheck size={14} /><span>{session.workflowMessage ?? (session.phase === 'waiting_approval' ? `A code-changing proposal requires explicit approval. Recovery ${session.recoveryAttempts} of ${session.maxRecoveryAttempts}.` : session.phase === 'completed' ? 'Reviewer and validator both passed. Ruflo completed safely.' : session.status === 'failed' ? 'The session stopped safely. No further changes will be attempted.' : 'Ruflo is gathering readable project evidence. Changes remain behind approval.')}</span></div>
+
+    <div className="ruflo-dashboard-grid">
+      <section className="ruflo-card ruflo-activity-card" aria-label="Live activity">
+        <div className="ruflo-card-heading"><div><span className="ruflo-eyebrow"><Activity size={11} /> Live activity</span><h3>{session.currentLabel}</h3></div><span className="ruflo-card-count">{session.activity.length} events</span></div>
+        <div className="ruflo-activity-list" aria-live="polite">{session.activity.length ? session.activity.slice(-8).map((item) => <div className={`ruflo-activity-row ${item.status}`} key={item.id} data-testid={`row-ruflo-activity-${item.id}`}><span className="ruflo-activity-mark">{activityIcon(item.status)}</span><div><strong>{item.label}</strong><small>{item.status === 'active' ? 'In progress on server' : item.status === 'failed' ? 'Stopped with an error' : 'Recorded by server'}</small></div><time>{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>) : <p className="ruflo-empty">Waiting for the first server event.</p>}</div>
+      </section>
+
+      <section className="ruflo-card ruflo-agents-card" aria-label="Agent roster">
+        <div className="ruflo-card-heading"><div><span className="ruflo-eyebrow"><Bot size={11} /> Agent roster</span><h3>Swarm assignments</h3></div><span className="ruflo-card-count">{session.agents.length} agents</span></div>
+        <div className="ruflo-agents">{session.agents.length ? session.agents.map((agent) => <div className={`ruflo-agent-row ${agent.status}`} key={agent.id} data-testid={`row-ruflo-agent-${agent.id}`}><span className="ruflo-agent-mark">{agent.status === 'active' ? <LoaderCircle size={13} className="spin" /> : agent.status === 'complete' ? <CircleCheck size={13} /> : agent.status === 'failed' ? <CircleAlert size={13} /> : <span />}</span><div><strong>{agent.role}</strong><small>{agent.executionId ?? agent.id}</small></div><span className="ruflo-agent-state">{humanize(agent.status)}{agent.attempts ? ` · ${agent.attempts} attempt${agent.attempts === 1 ? '' : 's'}` : ''}</span></div>) : <p className="ruflo-empty">No agents have been assigned yet.</p>}</div>
+      </section>
+    </div>
+
+    <div className="ruflo-dashboard-grid ruflo-lower-grid">
+      <section className="ruflo-card" aria-label="Execution waves and task graph">
+        <div className="ruflo-card-heading"><div><span className="ruflo-eyebrow"><Terminal size={11} /> Task graph</span><h3>Execution waves</h3></div><span className="ruflo-card-count">{session.executionWaves.length} waves</span></div>
+        <div className="ruflo-waves">{session.executionWaves.length ? session.executionWaves.map((wave, index) => {
+          const waveTasks = wave.taskIds.map((id) => taskMap.get(id)).filter((task): task is RufloClientSession['tasks'][number] => Boolean(task));
+          const waveDone = waveTasks.filter((task) => task.status === 'complete').length;
+          return <div className="ruflo-wave" key={wave.id} data-testid={`row-ruflo-wave-${wave.id}`}><div className="ruflo-wave-spine"><span>{String(index + 1).padStart(2, '0')}</span>{index < session.executionWaves.length - 1 && <i />}</div><div className="ruflo-wave-body"><div className="ruflo-wave-head"><strong>{wave.label}</strong><span className={`ruflo-wave-status ${wave.status}`}>{humanize(wave.status)}</span></div><small>{waveDone} of {waveTasks.length || wave.taskIds.length} tasks complete</small><div className="ruflo-task-list">{waveTasks.map((task) => <div className={`ruflo-task-row ${task.status}`} key={task.id}><span>{task.status === 'complete' ? <CircleCheck size={12} /> : task.status === 'failed' || task.status === 'blocked' ? <CircleAlert size={12} /> : task.status === 'active' ? <LoaderCircle size={12} className="spin" /> : <span className="ruflo-task-number" />}</span><strong>{task.title}</strong><em>{humanize(task.status)}{task.dependencies.length ? ` · waits ${task.dependencies.length}` : ''}</em></div>)}</div></div></div>;
+        }) : <p className="ruflo-empty">The task graph will appear as Ruflo plans the mission.</p>}</div>
+      </section>
+
+      <section className="ruflo-card ruflo-guard-card" aria-label="Validation and recovery">
+        <div className="ruflo-card-heading"><div><span className="ruflo-eyebrow"><ShieldCheck size={11} /> Safety ledger</span><h3>Validation &amp; recovery</h3></div><span className={`ruflo-ledger-state ${statusTone}`}>{humanize(session.phase)}</span></div>
+        <div className="ruflo-ledger">
+          <div className="ruflo-ledger-row"><span><LockKeyhole size={12} /> Proposal gate</span><strong className={session.proposalStatus === 'ready' ? 'waiting' : ''}>{proposalLabels[session.proposalStatus]}</strong></div>
+          <div className="ruflo-ledger-row"><span><Check size={12} /> Validation</span><strong className={session.validationStatus === 'fail' ? 'failed' : session.validationStatus === 'pass' ? 'passed' : ''}>{validationLabels[session.validationStatus]}</strong></div>
+          <div className="ruflo-ledger-row"><span><GitBranch size={12} /> Git boundary</span><strong>{gitLabels[session.git.status]}</strong></div>
+        </div>
+        {session.validation && <div className={`ruflo-validation-detail ${session.validation.status}`}><strong>{humanize(session.validation.status)}</strong><span>{session.validation.summary}</span></div>}
+        {session.error && <div className="ruflo-error-detail"><CircleAlert size={13} /><span><strong>{session.error.code}</strong>{session.error.message}</span></div>}
+        <div className={`ruflo-recovery-line ${statusTone}`}><span>Recovery attempts</span><strong>{session.recoveryAttempts} / {session.maxRecoveryAttempts}</strong></div>
+      </section>
+    </div>
+
+    <section className="ruflo-card ruflo-telemetry" aria-label="Provider and cost details">
+      <div className="ruflo-card-heading"><div><span className="ruflo-eyebrow"><Sparkles size={11} /> Runtime telemetry</span><h3>Provider route &amp; usage</h3></div><span className="ruflo-card-count">{session.usage.costStatus}</span></div>
+      <div className="ruflo-telemetry-grid">
+        <div className="ruflo-route"><span className="ruflo-subhead">Primary route</span><strong>{session.routing.primary.provider}</strong><small>{session.routing.primary.model}</small><p>{session.routing.reason}</p>{session.routing.fallbacks.length > 0 && <div className="ruflo-fallbacks"><span>Fallbacks</span>{session.routing.fallbacks.map((fallback) => <em key={`${fallback.provider}-${fallback.model}`}>{fallback.provider} / {fallback.model}</em>)}</div>}</div>
+        <div className="ruflo-usage-stats"><div><span>Requests</span><strong>{session.usage.requests}</strong></div><div><span>Input tokens</span><strong>{session.usage.inputTokens.toLocaleString()}</strong></div><div><span>Output tokens</span><strong>{session.usage.outputTokens.toLocaleString()}</strong></div><div><span>Estimated cost</span><strong>{formatUsd(session.usage.estimatedCostUsd)}</strong></div></div>
+      </div>
+       {session.usage.providerModels.length > 0 && <div className="ruflo-provider-models"><span>Models observed</span>{session.usage.providerModels.map((model) => <em key={`${model.provider}-${model.model}`}>{model.provider} / {model.model}</em>)}</div>}
+    </section>
+
+    <div className="ruflo-bottom-grid">
+      <section className="ruflo-card ruflo-files-card" aria-label="Affected files">
+        <div className="ruflo-card-heading"><div><span className="ruflo-eyebrow"><FileCode2 size={11} /> Change surface</span><h3>Affected files</h3></div><span className="ruflo-card-count">{session.affectedFiles.length} paths</span></div>
+        <div className="ruflo-file-list">{session.affectedFiles.length ? session.affectedFiles.map((file) => <span key={file} data-testid={`text-ruflo-file-${file}`}><FileCode2 size={11} />{file}</span>) : <span className="ruflo-empty">No affected files identified yet.</span>}</div>
+      </section>
+      <section className="ruflo-card ruflo-memory-card" aria-label="Bounded memory">
+        <div className="ruflo-card-heading"><div><span className="ruflo-eyebrow"><Code2 size={11} /> Context boundary</span><h3>Working memory</h3></div><span className={`ruflo-memory-state ${session.memory.bounded ? 'bounded' : 'unbounded'}`}>{session.memory.bounded ? 'Bounded' : 'Review'}</span></div>
+        <div className="ruflo-memory-main"><strong>{session.memory.factCount}</strong><span>facts available</span></div><p>{session.memory.status} · Session reports {session.memoryFactCount} retained fact{session.memoryFactCount === 1 ? '' : 's'}.</p>
+      </section>
+    </div>
+
+    <div className={`ruflo-note ${statusTone}`} data-testid="status-ruflo-approval"><ShieldCheck size={15} /><div><strong>{session.phase === 'waiting_approval' ? 'Approval boundary engaged' : 'Server-authoritative workflow'}</strong><span>{approvalMessage}</span></div></div>
   </section>;
 }
 
