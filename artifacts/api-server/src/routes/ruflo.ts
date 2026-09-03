@@ -64,6 +64,17 @@ import {
   type RufloSpecializedInspectRequest,
 } from "../ruflo/ruflo-specialized-agents";
 import { InMemoryRufloJobStore, RufloJobManager, type RufloJobRecord } from "../ruflo/ruflo-jobs";
+import {
+  parseAgentAuth,
+  RufloSwarmError,
+  RufloSwarmService,
+  topologyConnections,
+  type RufloAgent,
+  type RufloConsensus,
+  type RufloSwarmMessage,
+  type RufloSwarmTask,
+} from "../ruflo/ruflo-swarm";
+import { rufloSwarmRepository } from "../ruflo/ruflo-swarm-store";
 
 type RufloPublicActivity = {
   id: string;
@@ -247,10 +258,228 @@ const rufloModelRouter = new RufloModelRouter(providerManager.getProviders());
 const rufloToolRegistry = createDefaultRufloToolRegistry();
 const rufloMcpManager = new RufloMcpManager({
   registry: rufloToolRegistry,
-  isSessionOwned: (userId, sessionId) => runtimeSessions.get(sessionId)?.ownerId === userId,
+  isSessionOwned: (userId, sessionId, projectId) => {
+    const entry = runtimeSessions.get(sessionId);
+    return Boolean(entry?.ownerId === userId && (!projectId || entry.projectId === projectId));
+  },
 });
+const rufloSwarmService = new RufloSwarmService(rufloSwarmRepository, process.env.SESSION_SECRET ?? "");
 
 router.use((req, res, next) => requireAuthenticatedUser(req, res) ? next() : undefined);
+
+router.post("/ruflo/swarms", async (req, res) => {
+  const userId = req.authUser!.id;
+  const sessionId = stringBody(req.body?.sessionId);
+  const projectId = optionalString(req.body?.projectId) ?? "default";
+  const session = await rufloSessionStore.getSession(userId, sessionId);
+  if (!session) {
+    res.status(404).json({ error: "Ruflo session not found.", code: "not_found" });
+    return;
+  }
+  try {
+    const result = await rufloSwarmService.createSwarm(userId, {
+      sessionId,
+      projectId,
+      topology: req.body?.topology,
+      maxAgents: typeof req.body?.maxAgents === "number" ? req.body.maxAgents : undefined,
+    });
+    res.status(201).json({ swarm: result.swarm, leader: publicSwarmAgent(result.leader), credential: result.credential });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.get("/ruflo/swarms/:swarmId", async (req, res) => {
+  try {
+    const state = await rufloSwarmService.getState(req.authUser!.id, req.params.swarmId);
+    res.json({
+      ...state,
+      agents: state.agents.map(publicSwarmAgent),
+      connections: topologyConnections(state.swarm, state.agents),
+      events: state.events.slice(-120),
+    });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.get("/ruflo/swarms/:swarmId/agents", async (req, res) => {
+  try {
+    const agents = await rufloSwarmService.listAgents(req.authUser!.id, req.params.swarmId);
+    res.json({ agents: agents.map(publicSwarmAgent) });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/agents", async (req, res) => {
+  try {
+    const result = await rufloSwarmService.registerAgent(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.body?.agentId, req.body?.credential), {
+      name: stringBody(req.body?.name),
+      type: optionalString(req.body?.type),
+      role: req.body?.role,
+      parentId: optionalString(req.body?.parentId),
+      capabilities: Array.isArray(req.body?.capabilities) ? req.body.capabilities.filter((value: unknown): value is string => typeof value === "string") : undefined,
+    });
+    res.status(201).json({ agent: publicSwarmAgent(result.agent), credential: result.credential });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/messages", async (req, res) => {
+  try {
+    const message = await rufloSwarmService.sendMessage(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.body?.agentId, req.body?.credential), {
+      toAgentId: stringBody(req.body?.toAgentId),
+      type: stringBody(req.body?.type),
+      payload: recordBody(req.body?.payload),
+    });
+    res.status(201).json({ message: publicSwarmMessage(message) });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.get("/ruflo/swarms/:swarmId/agents/:agentId/mailbox", async (req, res) => {
+  try {
+    const messages = await rufloSwarmService.readMailbox(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.params.agentId, req.query.credential), numberQuery(req.query.limit, 24));
+    res.json({ messages: messages.map(publicSwarmMessage) });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/messages/:messageId/ack", async (req, res) => {
+  try {
+    const message = await rufloSwarmService.acknowledgeMessage(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.body?.agentId, req.body?.credential), req.params.messageId);
+    res.json({ message: publicSwarmMessage(message) });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.get("/ruflo/swarms/:swarmId/context", async (req, res) => {
+  try {
+    const entries = await rufloSwarmService.readContext(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.query.agentId, req.query.credential), optionalString(req.query.namespace));
+    res.json({ entries });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.put("/ruflo/swarms/:swarmId/context", async (req, res) => {
+  try {
+    const entry = await rufloSwarmService.writeContext(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.body?.agentId, req.body?.credential), {
+      namespace: stringBody(req.body?.namespace),
+      key: stringBody(req.body?.key),
+      value: req.body?.value,
+      expectedVersion: typeof req.body?.expectedVersion === "number" ? req.body.expectedVersion : undefined,
+    });
+    res.json({ entry });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/subscriptions", async (req, res) => {
+  try {
+    const subscription = await rufloSwarmService.subscribe(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.body?.agentId, req.body?.credential), stringBody(req.body?.eventType));
+    res.status(201).json({ subscription });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.get("/ruflo/swarms/:swarmId/events", async (req, res) => {
+  try {
+    const events = await rufloSwarmService.listEvents(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.query.agentId, req.query.credential), numberQuery(req.query.after, 0));
+    res.json({ events });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/agents/:agentId/heartbeat", async (req, res) => {
+  try {
+    const agent = await rufloSwarmService.heartbeat(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.params.agentId, req.body?.credential));
+    res.json({ agent: publicSwarmAgent(agent) });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/tasks", async (req, res) => {
+  try {
+    const task = await rufloSwarmService.createTask(req.authUser!.id, req.params.swarmId, {
+      title: stringBody(req.body?.title),
+      description: optionalString(req.body?.description),
+      payload: recordBody(req.body?.payload),
+    });
+    res.status(201).json({ task });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.get("/ruflo/swarms/:swarmId/tasks", async (req, res) => {
+  try {
+    res.json({ tasks: await rufloSwarmService.listTasks(req.authUser!.id, req.params.swarmId) });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/tasks/:taskId/lease", async (req, res) => {
+  try {
+    const task = await rufloSwarmService.acquireTaskLease(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.body?.agentId, req.body?.credential), req.params.taskId);
+    res.json({ task });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/tasks/:taskId/complete", async (req, res) => {
+  try {
+    const task = await rufloSwarmService.completeTask(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.body?.agentId, req.body?.credential), req.params.taskId, {
+      result: req.body?.result,
+      error: optionalString(req.body?.error),
+    });
+    res.json({ task });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/consensus", async (req, res) => {
+  try {
+    const consensus = await rufloSwarmService.createConsensus(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.body?.agentId, req.body?.credential), {
+      type: stringBody(req.body?.type),
+      payload: recordBody(req.body?.payload),
+      voterAgentIds: Array.isArray(req.body?.voterAgentIds) ? req.body.voterAgentIds.filter((value: unknown): value is string => typeof value === "string") : undefined,
+      strategy: req.body?.strategy,
+    });
+    res.status(201).json({ consensus: publicConsensus(consensus) });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/consensus/:consensusId/vote", async (req, res) => {
+  try {
+    const consensus = await rufloSwarmService.vote(req.authUser!.id, req.params.swarmId, parseAgentAuth(req.body?.agentId, req.body?.credential), req.params.consensusId, req.body?.value);
+    res.json({ consensus: publicConsensus(consensus) });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
+
+router.post("/ruflo/swarms/:swarmId/cancel", async (req, res) => {
+  try {
+    res.json({ swarm: await rufloSwarmService.cancelSwarm(req.authUser!.id, req.params.swarmId) });
+  } catch (error) {
+    sendRufloSwarmError(res, error);
+  }
+});
 
 router.get("/ruflo/providers", (_req, res) => {
   res.json({
@@ -1874,6 +2103,47 @@ function parseRepository(value: unknown): RepositoryRef | undefined {
 function publicError(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return "Ruflo could not start this session.";
+}
+
+function publicSwarmAgent(agent: RufloAgent): Omit<RufloAgent, "credentialNonce"> {
+  const { credentialNonce: _credentialNonce, ...publicAgent } = agent;
+  return publicAgent;
+}
+
+function publicSwarmMessage(message: RufloSwarmMessage): RufloSwarmMessage {
+  return { ...message, payload: message.payload };
+}
+
+function publicConsensus(consensus: RufloConsensus): RufloConsensus {
+  return { ...consensus, votes: consensus.votes.map((vote) => ({ ...vote, value: vote.value })) };
+}
+
+function recordBody(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function numberQuery(value: unknown, fallback: number): number {
+  const parsed = typeof value === "string" ? Number(value) : fallback;
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function sendRufloSwarmError(
+  res: { status: (code: number) => { json: (value: unknown) => void } },
+  error: unknown,
+): void {
+  if (error instanceof RufloSwarmError) {
+    const status = error.code === "not_found" || error.code === "recipient_not_found" || error.code === "message_not_found" || error.code === "task_not_found"
+      ? 404
+      : error.code === "agent_unauthorized" || error.code === "capability_denied" || error.code === "lease_expired" || error.code === "lease_owner"
+        ? 403
+        : error.code === "context_conflict" || error.code === "lease_taken" || error.code === "topology"
+          ? 409
+          : error.code === "configuration" ? 503 : 400;
+    res.status(status).json({ error: error.message, code: error.code });
+    return;
+  }
+  res.status(400).json({ error: publicError(error), code: "swarm_request_failed" });
 }
 
 function proposalError(error: unknown): { code: string; message: string } {

@@ -89,7 +89,7 @@ export type RufloMcpManagerOptions = {
   allowedHosts?: string[];
   maxToolCalls?: number;
   maxConcurrentCalls?: number;
-  isSessionOwned?: (userId: string, sessionId: string) => boolean;
+  isSessionOwned?: (userId: string, sessionId: string, projectId?: string) => boolean;
   clientFactory?: (configuration: RufloMcpTransportConfiguration) => RufloMcpClientLike;
 };
 
@@ -130,7 +130,7 @@ export class RufloMcpManager {
   private readonly allowedHosts: Set<string>;
   private readonly maxToolCalls: number;
   private readonly maxConcurrentCalls: number;
-  private readonly isSessionOwned: (userId: string, sessionId: string) => boolean;
+  private readonly isSessionOwned: (userId: string, sessionId: string, projectId?: string) => boolean;
   private readonly clientFactory: (configuration: RufloMcpTransportConfiguration) => RufloMcpClientLike;
 
   constructor(options: RufloMcpManagerOptions = {}) {
