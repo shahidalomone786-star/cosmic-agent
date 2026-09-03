@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { RUFLO_PHASE9_AGENT_CAPABILITIES } from "./ruflo-phase9-catalog";
 
 export type RufloSwarmTopology = "hierarchical" | "mesh";
 export type RufloSwarmStatus = "created" | "running" | "completed" | "failed" | "cancelled";
@@ -159,6 +160,7 @@ export const RUFLO_AGENT_CAPABILITIES: Record<string, string[]> = {
   reviewer: ["context:read", "message:send", "message:receive", "consensus:vote"],
   validator: ["context:read", "message:send", "message:receive", "consensus:vote"],
   tester: ["context:read", "context:write", "message:send", "message:receive", "consensus:vote"],
+  ...RUFLO_PHASE9_AGENT_CAPABILITIES,
 };
 
 export class RufloSwarmError extends Error {

@@ -1,3 +1,5 @@
+import { RUFLO_PHASE9_IMPORTED_TOOLS } from "./ruflo-phase9-catalog";
+
 export const RUFLO_RISK_LEVELS = [
   "READ_ONLY",
   "LOW",
@@ -11,6 +13,8 @@ export type RufloToolSource = "ruflo" | "mcp";
 export type RufloToolPermission =
   | "repository:read"
   | "workspace:read"
+  | "memory:read"
+  | "memory:write"
   | "mcp:read"
   | "mcp:write"
   | "network:outbound";
@@ -41,6 +45,24 @@ export type RufloUnifiedToolDefinition = {
   timeoutMs: number;
   enabled: boolean;
   approvalRequired: boolean;
+  provenance?: {
+    originalRepository: string;
+    originalRevision: string;
+    sourcePath: string;
+    license: "MIT";
+    reuseMode: "adapted" | "metadata_only";
+  };
+  agentAccess?: {
+    rufloOnly: true;
+    allowedAgentTypes: string[];
+  };
+  resourceLimits?: {
+    maxInputBytes: number;
+    maxOutputBytes: number;
+    maxResults: number;
+    maxConcurrentCalls: number;
+  };
+  availability?: "enabled" | "disabled";
 };
 
 export type RufloToolPolicyContext = {
@@ -174,6 +196,9 @@ export function createDefaultRufloToolRegistry(): RufloToolRegistry {
     enabled: true,
     approvalRequired: false,
   });
+  // Phase 9 adds only adapters whose execution can be routed through existing
+  // repository, workspace, memory, audit, and budget boundaries.
+  for (const definition of RUFLO_PHASE9_IMPORTED_TOOLS) registry.register(definition);
   return registry;
 }
 
@@ -246,6 +271,11 @@ function cloneDefinition(definition: RufloUnifiedToolDefinition): RufloUnifiedTo
     permissions: [...definition.permissions],
     inputSchema: structuredClone(definition.inputSchema),
     outputSchema: definition.outputSchema ? structuredClone(definition.outputSchema) : undefined,
+    provenance: definition.provenance ? { ...definition.provenance } : undefined,
+    agentAccess: definition.agentAccess
+      ? { rufloOnly: true, allowedAgentTypes: [...definition.agentAccess.allowedAgentTypes] }
+      : undefined,
+    resourceLimits: definition.resourceLimits ? { ...definition.resourceLimits } : undefined,
   };
 }
 

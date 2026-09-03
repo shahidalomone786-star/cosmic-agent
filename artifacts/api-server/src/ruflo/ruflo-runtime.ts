@@ -30,6 +30,14 @@ import {
 } from "./ruflo-cost-tracker";
 import type { RufloCapabilityClass } from "./ruflo-provider-router";
 import { createDefaultRufloToolRegistry, type RufloToolRegistry } from "./ruflo-tool-registry";
+import { projectMemoryKey, rufloMemoryStore } from "./memory-store";
+import { rufloToolAuditLog } from "./ruflo-audit";
+import {
+  RUFLO_PHASE9_EXCLUDED_TOOL_DEFINITIONS,
+  RUFLO_PHASE9_IMPORTED_AGENTS,
+  RUFLO_PHASE9_PLUGIN_CAPABILITIES,
+  RUFLO_PHASE9_ORIGINAL,
+} from "./ruflo-phase9-catalog";
 
 export const DEFAULT_RUFLO_LIMITS = {
   maxIterations: 8,
@@ -54,17 +62,31 @@ export type RufloWorkspaceRef = {
   projectId: string;
 };
 
-export type RufloToolName = "inspect_repository" | "search_repository" | "read_file";
+export type RufloToolName =
+  | "inspect_repository"
+  | "search_repository"
+  | "read_file"
+  | "memory_search"
+  | "memory_store"
+  | "memory_cleanup"
+  | "memory_stats"
+  | "agentdb_health"
+  | "guidance_capabilities"
+  | "system_info"
+  | "system_health";
 
 export type RufloToolRequest = {
   name: RufloToolName;
   input: {
     query?: string;
     path?: string;
+    [key: string]: unknown;
   };
   repository?: RepositoryRef;
   workspace?: RufloWorkspaceRef;
   task: string;
+  sessionId?: string;
+  approved?: boolean;
 };
 
 export type RufloToolResult = {
@@ -366,15 +388,72 @@ export async function runRufloSession(input: RufloRunInput): Promise<RufloSessio
 export function createRufloToolExecutor(registry: RufloToolRegistry = createDefaultRufloToolRegistry()): RufloToolExecutor {
   return {
     async execute(request): Promise<RufloToolResult> {
-      if (!request.repository && !request.workspace) {
+      const definition = registry.get(request.name);
+      const requiresWorkspace = new Set<RufloToolName>([
+        "inspect_repository",
+        "search_repository",
+        "read_file",
+        "memory_search",
+        "memory_store",
+        "memory_cleanup",
+        "memory_stats",
+        "agentdb_health",
+      ]);
+      if (requiresWorkspace.has(request.name) && !request.repository && !request.workspace) {
         throw new RufloRuntimeInputError("A connected repository or workspace is required for Ruflo inspection.");
       }
+      const userId = request.workspace?.userId ?? "repository-session";
+      const sessionId = request.sessionId ?? "runtime-session";
+      const startedAt = Date.now();
+      let auditStatus: "not_required" | "required" | "approved" = definition.approvalRequired ? "required" : "not_required";
       registry.authorize(request.name, request.input, {
-        permissions: ["repository:read", "workspace:read"],
+        permissions: ["repository:read", "workspace:read", "memory:read", "memory:write"],
         allowLowRisk: false,
-        approved: false,
+        approved: request.approved === true,
+      });
+      auditStatus = definition.approvalRequired ? "approved" : "not_required";
+      rufloToolAuditLog.record({
+        sessionId,
+        userId,
+        toolId: request.name,
+        source: definition.source,
+        riskLevel: definition.riskLevel,
+        approvalStatus: auditStatus,
+        executionStatus: "authorized",
       });
 
+      try {
+        const result = await executeNativeRufloTool(request, registry);
+        rufloToolAuditLog.record({
+          sessionId,
+          userId,
+          toolId: request.name,
+          source: definition.source,
+          riskLevel: definition.riskLevel,
+          approvalStatus: auditStatus,
+          executionStatus: "completed",
+          durationMs: Date.now() - startedAt,
+        });
+        return result;
+      } catch (error) {
+        rufloToolAuditLog.record({
+          sessionId,
+          userId,
+          toolId: request.name,
+          source: definition.source,
+          riskLevel: definition.riskLevel,
+          approvalStatus: auditStatus,
+          executionStatus: "failed",
+          durationMs: Date.now() - startedAt,
+          errorCategory: error instanceof Error ? error.name : "execution_failed",
+        });
+        throw error;
+      }
+    },
+  };
+}
+
+async function executeNativeRufloTool(request: RufloToolRequest, registry: RufloToolRegistry): Promise<RufloToolResult> {
       if (request.name === "inspect_repository") {
         if (request.repository) {
           const overview = await getRepositoryOverview(request.repository);
@@ -425,6 +504,122 @@ export function createRufloToolExecutor(registry: RufloToolRegistry = createDefa
         };
       }
 
+      if (request.name === "memory_search") {
+        const workspace = request.workspace;
+        if (!workspace) throw new RufloRuntimeInputError("memory_search requires a workspace-scoped Ruflo session.");
+        const query = typeof request.input.query === "string" ? request.input.query.trim().slice(0, 500) : "";
+        if (!query) throw new RufloRuntimeInputError("memory_search requires a bounded query.");
+        const projectKey = typeof request.input.projectKey === "string" && request.input.projectKey.trim()
+          ? request.input.projectKey.trim().slice(0, 300)
+          : projectMemoryKey({ projectId: workspace.projectId, repository: request.repository });
+        const limit = typeof request.input.limit === "number" && Number.isFinite(request.input.limit)
+          ? Math.max(1, Math.min(24, Math.floor(request.input.limit)))
+          : 12;
+        const memories = await rufloMemoryStore.retrieveRelevant(workspace.userId, projectKey, { query, limit });
+        return {
+          name: request.name,
+          summary: `Memory search returned ${memories.length} bounded result(s).`,
+          data: memories.map((memory) => ({
+            id: memory.id,
+            kind: memory.kind,
+            fact: memory.fact,
+            relevance: memory.relevance,
+            confidence: memory.confidence,
+            importance: memory.importance,
+          })),
+        };
+      }
+
+      if (request.name === "memory_store") {
+        const workspace = request.workspace;
+        if (!workspace) throw new RufloRuntimeInputError("memory_store requires a workspace-scoped Ruflo session.");
+        const kind = typeof request.input.kind === "string" ? request.input.kind : "project_fact";
+        const allowedKinds = new Set([
+          "project_fact", "coding_pattern", "successful_solution", "failed_solution",
+          "architecture_decision", "warning", "tool_pattern", "technology", "architecture",
+          "success", "validation_problem",
+        ]);
+        if (!allowedKinds.has(kind)) throw new RufloRuntimeInputError("memory_store received an unsupported memory kind.");
+        const projectKey = typeof request.input.projectKey === "string" && request.input.projectKey.trim()
+          ? request.input.projectKey.trim().slice(0, 300)
+          : projectMemoryKey({ projectId: workspace.projectId, repository: request.repository });
+        const memory = await rufloMemoryStore.remember(workspace.userId, {
+          projectKey,
+          kind: kind as Parameters<typeof rufloMemoryStore.remember>[1]["kind"],
+          fact: String(request.input.fact ?? ""),
+          sourceSessionId: request.sessionId,
+          importance: typeof request.input.importance === "number" ? request.input.importance : undefined,
+          confidence: typeof request.input.confidence === "number" ? request.input.confidence : undefined,
+        });
+        if (!memory) throw new RufloRuntimeInputError("memory_store rejected an empty or unsafe memory fact.");
+        return { name: request.name, summary: "Stored one sanitized project memory fact.", data: { id: memory.id, kind: memory.kind, projectKey: memory.projectKey } };
+      }
+
+      if (request.name === "memory_cleanup") {
+        const workspace = request.workspace;
+        if (!workspace) throw new RufloRuntimeInputError("memory_cleanup requires a workspace-scoped Ruflo session.");
+        const projectKey = typeof request.input.projectKey === "string" && request.input.projectKey.trim()
+          ? request.input.projectKey.trim().slice(0, 300)
+          : projectMemoryKey({ projectId: workspace.projectId, repository: request.repository });
+        const maxDeletes = typeof request.input.maxDeletes === "number" && Number.isFinite(request.input.maxDeletes)
+          ? Math.max(0, Math.min(24, Math.floor(request.input.maxDeletes)))
+          : 12;
+        const deleted = await rufloMemoryStore.cleanup(workspace.userId, projectKey, maxDeletes);
+        return { name: request.name, summary: `Removed ${deleted} obsolete memory fact(s).`, data: { projectKey, deleted } };
+      }
+
+      if (request.name === "memory_stats" || request.name === "agentdb_health") {
+        const workspace = request.workspace;
+        if (!workspace) throw new RufloRuntimeInputError(`${request.name} requires a workspace-scoped Ruflo session.`);
+        const projectKey = typeof request.input.projectKey === "string" && request.input.projectKey.trim()
+          ? request.input.projectKey.trim().slice(0, 300)
+          : projectMemoryKey({ projectId: workspace.projectId, repository: request.repository });
+        const memories = await rufloMemoryStore.listMemory(workspace.userId, projectKey);
+        const data = {
+          projectKey,
+          status: "healthy",
+          count: memories.length,
+          embeddingConfigured: memories.some((memory) => Boolean(memory.embeddingProvider)),
+        };
+        return { name: request.name, summary: `Persistent memory is healthy with ${memories.length} bounded fact(s).`, data };
+      }
+
+      if (request.name === "guidance_capabilities") {
+        const includeDisabled = request.input.includeDisabled === true;
+        return {
+          name: request.name,
+          summary: "Returned the Ruflo Phase 9 capability catalog.",
+          data: {
+            original: RUFLO_PHASE9_ORIGINAL,
+            tools: registry.list().filter((tool) => includeDisabled || tool.availability !== "disabled").map((tool) => ({
+              id: tool.id,
+              riskLevel: tool.riskLevel,
+              enabled: tool.enabled,
+              availability: tool.availability ?? "enabled",
+              sourcePath: tool.provenance?.sourcePath,
+            })),
+            agents: RUFLO_PHASE9_IMPORTED_AGENTS.map((agent) => ({ id: agent.id, pluginName: agent.pluginName, capabilities: agent.capabilities })),
+            plugins: RUFLO_PHASE9_PLUGIN_CAPABILITIES.map((plugin) => ({ id: plugin.id, capability: plugin.capability, status: plugin.status })),
+            excludedToolDefinitions: includeDisabled ? RUFLO_PHASE9_EXCLUDED_TOOL_DEFINITIONS.map((tool) => ({ id: tool.id, reason: tool.description })) : undefined,
+          },
+        };
+      }
+
+      if (request.name === "system_info" || request.name === "system_health") {
+        return {
+          name: request.name,
+          summary: request.name === "system_health" ? "Ruflo runtime is healthy." : "Returned Ruflo runtime information.",
+          data: {
+            status: "healthy",
+            phase: 9,
+            originalRevision: RUFLO_PHASE9_ORIGINAL.revision,
+            registeredToolCount: registry.list().length,
+            importedAgentCount: RUFLO_PHASE9_IMPORTED_AGENTS.length,
+            importedPluginCapabilityCount: RUFLO_PHASE9_PLUGIN_CAPABILITIES.length,
+          },
+        };
+      }
+
       const query = typeof request.input.query === "string" ? request.input.query.trim().slice(0, 240) : "";
       if (!query) throw new RufloRuntimeInputError("search_repository requires a bounded search query.");
       const results = request.repository
@@ -436,8 +631,6 @@ export function createRufloToolExecutor(registry: RufloToolRegistry = createDefa
         data: results.slice(0, 40),
         files: uniquePaths(results.map((result) => result.path)),
       };
-    },
-  };
 }
 
 function createSession(task: string, input: RufloRunInput, limits: RufloLimits): RufloSession {
@@ -610,6 +803,7 @@ function buildToolRequest(decision: RufloDecision, input: RufloRunInput, session
     repository: input.repository,
     workspace: input.workspace,
     task: session.task,
+    sessionId: session.id,
   };
 }
 

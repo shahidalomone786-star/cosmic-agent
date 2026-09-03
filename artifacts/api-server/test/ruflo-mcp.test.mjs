@@ -100,7 +100,11 @@ function context(toolId, input, extra = {}) {
 
 test("registers the existing Ruflo tools in one registry", () => {
   const registry = createDefaultRufloToolRegistry();
-  assert.deepEqual(registry.list().map((tool) => tool.id), ["inspect_repository", "read_file", "search_repository"]);
+  const registeredIds = registry.list().map((tool) => tool.id);
+  assert.ok(registeredIds.includes("inspect_repository"));
+  assert.ok(registeredIds.includes("read_file"));
+  assert.ok(registeredIds.includes("search_repository"));
+  assert.ok(registeredIds.includes("memory_search"));
   assert.equal(registry.get("read_file").riskLevel, "READ_ONLY");
   assert.equal(registry.get("read_file").approvalRequired, false);
 });

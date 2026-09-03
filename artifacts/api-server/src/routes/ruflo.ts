@@ -42,6 +42,12 @@ import {
 } from "../ruflo/ruflo-cost-tracker";
 import { createDefaultRufloToolRegistry } from "../ruflo/ruflo-tool-registry";
 import {
+  RUFLO_PHASE9_EXCLUDED_TOOL_DEFINITIONS,
+  RUFLO_PHASE9_IMPORTED_AGENTS,
+  RUFLO_PHASE9_PLUGIN_CAPABILITIES,
+  RUFLO_PHASE9_ORIGINAL,
+} from "../ruflo/ruflo-phase9-catalog";
+import {
   RufloMcpManager,
   RufloMcpManagerError,
   type RufloMcpScope,
@@ -507,6 +513,25 @@ router.get("/ruflo/tools", (_req, res) => {
       ...tool,
       inputSchema: tool.inputSchema,
       outputSchema: tool.outputSchema,
+    })),
+  });
+});
+
+router.get("/ruflo/catalog", (_req, res) => {
+  res.json({
+    original: RUFLO_PHASE9_ORIGINAL,
+    tools: rufloToolRegistry.list().map((tool) => ({
+      ...tool,
+      inputSchema: tool.inputSchema,
+      outputSchema: tool.outputSchema,
+    })),
+    importedAgents: RUFLO_PHASE9_IMPORTED_AGENTS,
+    pluginCapabilities: RUFLO_PHASE9_PLUGIN_CAPABILITIES,
+    excludedToolDefinitions: RUFLO_PHASE9_EXCLUDED_TOOL_DEFINITIONS.map((tool) => ({
+      id: tool.id,
+      description: tool.description,
+      sourcePath: tool.provenance.sourcePath,
+      reason: tool.description,
     })),
   });
 });
