@@ -46,6 +46,7 @@ export type RufloMcpServerConfiguration = {
 export type RufloMcpExecutionContext = {
   userId: string;
   sessionId: string;
+  projectId?: string;
   toolId: string;
   taskId?: string;
   input: unknown;
@@ -173,14 +174,15 @@ export class RufloMcpManager {
       .map(cloneConfiguration);
   }
 
-  get(ownerId: string, serverName: string): RufloMcpServerConfiguration {
+  get(ownerId: string, serverName: string, projectId?: string): RufloMcpServerConfiguration {
     const configuration = this.configurations.get(this.serverKey(ownerId, serverName));
     if (!configuration) throw new RufloMcpManagerError("server_not_found", "MCP server configuration was not found.");
+    this.assertConfigurationScope(configuration, projectId);
     return cloneConfiguration(configuration);
   }
 
-  async setEnabled(ownerId: string, serverName: string, enabled: boolean): Promise<RufloMcpServerConfiguration> {
-    const configuration = this.get(ownerId, serverName);
+  async setEnabled(ownerId: string, serverName: string, enabled: boolean, projectId?: string): Promise<RufloMcpServerConfiguration> {
+    const configuration = this.get(ownerId, serverName, projectId);
     const updated = this.configure({ ...configuration, enabled });
     if (!enabled) {
       await this.clients.get(this.serverKey(ownerId, serverName))?.close();
@@ -190,8 +192,8 @@ export class RufloMcpManager {
     return updated;
   }
 
-  async discover(ownerId: string, serverName: string): Promise<RufloUnifiedToolDefinition[]> {
-    const configuration = this.get(ownerId, serverName);
+  async discover(ownerId: string, serverName: string, projectId?: string): Promise<RufloUnifiedToolDefinition[]> {
+    const configuration = this.get(ownerId, serverName, projectId);
     if (!configuration.enabled) throw new RufloMcpManagerError("server_disabled", "The MCP server is disabled.");
     const key = this.serverKey(ownerId, serverName);
     const client = this.clientFactory(configuration.transport);
@@ -213,8 +215,8 @@ export class RufloMcpManager {
   }
 
   approveTool(context: RufloMcpExecutionContext): { approvalId: string; toolId: string; expiresAt: string } {
-    this.assertSession(context.userId, context.sessionId);
-    const tool = this.getOwnedTool(context.userId, context.toolId);
+    this.assertSession(context.userId, context.sessionId, context.projectId);
+    const tool = this.getOwnedTool(context.userId, context.toolId, context.projectId);
     if (tool.riskLevel === "READ_ONLY" && !tool.approvalRequired) {
       throw new RufloMcpManagerError("invalid_approval", "Read-only MCP tools do not require approval.");
     }
@@ -249,9 +251,9 @@ export class RufloMcpManager {
     let approvalStatus: "not_required" | "approved" = "not_required";
     const startedAt = Date.now();
     try {
-      this.assertSession(context.userId, context.sessionId);
-      tool = this.getOwnedTool(context.userId, context.toolId);
-      const configuration = this.get(context.userId, tool.serverName!);
+      this.assertSession(context.userId, context.sessionId, context.projectId);
+      tool = this.getOwnedTool(context.userId, context.toolId, context.projectId);
+      const configuration = this.get(context.userId, tool.serverName!, context.projectId);
       if (!configuration.enabled) throw new RufloMcpManagerError("server_disabled", "The MCP server is disabled.");
       validateInput(tool, context.input);
       validateSafePathInputs(context.input);
@@ -275,10 +277,19 @@ export class RufloMcpManager {
         const client = this.clients.get(this.serverKey(context.userId, configuration.serverName));
         if (!client) throw new RufloMcpManagerError("execution_failed", "Discover the MCP server before executing a tool.");
         if (context.approvalId) this.approvals.delete(context.approvalId);
-        const call = await withTimeout(
-          client.callTool(tool.name, context.input, Math.min(configuration.timeoutMs, tool.timeoutMs)),
-          Math.min(configuration.timeoutMs, tool.timeoutMs),
-        );
+        let call: Awaited<ReturnType<RufloMcpClientLike["callTool"]>>;
+        try {
+          call = await withTimeout(
+            client.callTool(tool.name, context.input, Math.min(configuration.timeoutMs, tool.timeoutMs)),
+            Math.min(configuration.timeoutMs, tool.timeoutMs),
+          );
+        } catch (error) {
+          if (error instanceof RufloMcpClientError && error.code === "timeout") {
+            await client.close();
+            this.clients.delete(this.serverKey(context.userId, configuration.serverName));
+          }
+          throw error;
+        }
         if (call.isError) throw new RufloMcpManagerError("execution_failed", "The MCP server reported a tool failure.");
         if (tool.outputSchema && call.structuredContent !== undefined) validateJsonSchema(tool.outputSchema, call.structuredContent, "output");
         const output = call.structuredContent ?? { content: call.content ?? [] };
@@ -339,10 +350,10 @@ export class RufloMcpManager {
     return this.registry.registerOrReplace(definition);
   }
 
-  private getOwnedTool(ownerId: string, toolId: string): RufloUnifiedToolDefinition {
+  private getOwnedTool(ownerId: string, toolId: string, projectId?: string): RufloUnifiedToolDefinition {
     const tool = this.registry.get(toolId);
     if (tool.source !== "mcp" || !tool.serverName || tool.ownerId !== ownerId) throw new RufloMcpManagerError("tool_not_found", "MCP tool was not found.");
-    const configuration = this.get(ownerId, tool.serverName);
+    const configuration = this.get(ownerId, tool.serverName, projectId);
     if (!configuration.allowedTools.includes(tool.name)) throw new RufloMcpManagerError("tool_not_allowed", "MCP tool is no longer allowlisted.");
     return tool;
   }
@@ -356,9 +367,15 @@ export class RufloMcpManager {
     if (Date.now() - Date.parse(approval.approvedAt) > 10 * 60_000) throw new RufloMcpManagerError("invalid_approval", "This MCP tool approval has expired.");
   }
 
-  private assertSession(userId: string, sessionId: string): void {
-    if (!userId.trim() || !sessionId.trim() || !this.isSessionOwned(userId, sessionId)) {
+  private assertSession(userId: string, sessionId: string, projectId?: string): void {
+    if (!userId.trim() || !sessionId.trim() || !this.isSessionOwned(userId, sessionId, projectId)) {
       throw new RufloMcpManagerError("session_unauthorized", "The Ruflo session is not owned by the authenticated user.");
+    }
+  }
+
+  private assertConfigurationScope(configuration: RufloMcpServerConfiguration, projectId?: string): void {
+    if (configuration.scope.type === "project" && configuration.scope.projectId !== projectId) {
+      throw new RufloMcpManagerError("session_unauthorized", "The MCP server is not available in this Ruflo project.");
     }
   }
 
