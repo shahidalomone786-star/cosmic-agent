@@ -14,3 +14,4 @@
 - [Coding request execution route](agent-continuation-routing.md) — Repository coding requests must enter the bounded agent session, not the text-only chat stream.
 - [Generated test bundle coordination](generated-test-bundle-coordination.md) — Node tests importing generated bundles must build their entrypoints in one non-concurrent runner.
 - [Phase 9 import boundaries](phase9-import-boundaries.md) — Adapt Ruflo only through existing server-owned controls; keep authority-heavy runtimes as disabled metadata.
+- [Phase 10 executable inventory](phase10-executable-inventory.md) — Count only enabled, bounded, audited adapters; preserve unsupported source capabilities as disabled provenance.

@@ -25,7 +25,8 @@ const { InMemoryRufloSwarmRepository, RufloSwarmService } = await import("../tes
 test("registers the compatible Phase 9 tools with provenance and Ruflo-only access", () => {
   const registry = createDefaultRufloToolRegistry();
   const ids = registry.list("ruflo").map((tool) => tool.id);
-  assert.equal(ids.length, 11);
+  assert.ok(ids.length >= 300);
+  assert.ok(catalog.RUFLO_PHASE9_IMPORTED_TOOLS.every((tool) => ids.includes(tool.id)));
   assert.ok(ids.includes("memory_search"));
   assert.ok(ids.includes("guidance_capabilities"));
   const memory = registry.get("memory_search");

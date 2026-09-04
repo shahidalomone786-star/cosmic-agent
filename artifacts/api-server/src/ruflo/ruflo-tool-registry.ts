@@ -1,4 +1,5 @@
 import { RUFLO_PHASE9_IMPORTED_TOOLS } from "./ruflo-phase9-catalog";
+import { RUFLO_PHASE10_TOOL_DEFINITIONS } from "./ruflo-phase10-catalog";
 
 export const RUFLO_RISK_LEVELS = [
   "READ_ONLY",
@@ -15,6 +16,7 @@ export type RufloToolPermission =
   | "workspace:read"
   | "memory:read"
   | "memory:write"
+  | "terminal:execute"
   | "mcp:read"
   | "mcp:write"
   | "network:outbound";
@@ -50,7 +52,8 @@ export type RufloUnifiedToolDefinition = {
     originalRevision: string;
     sourcePath: string;
     license: "MIT";
-    reuseMode: "adapted" | "metadata_only";
+    reuseMode: "adapted" | "native" | "metadata_only";
+    originalToolName?: string;
   };
   agentAccess?: {
     rufloOnly: true;
@@ -62,6 +65,7 @@ export type RufloUnifiedToolDefinition = {
     maxResults: number;
     maxConcurrentCalls: number;
   };
+  executionAdapter?: "bounded_evidence" | "sandboxed_terminal" | "safe_browser" | "disabled";
   availability?: "enabled" | "disabled";
 };
 
@@ -151,6 +155,23 @@ export class RufloToolRegistry {
 
 export function createDefaultRufloToolRegistry(): RufloToolRegistry {
   const registry = new RufloToolRegistry();
+  for (const id of ["phase10_catalog", "phase10_provenance", "phase10_limits", "phase10_security", "phase10_audit"]) {
+    registry.register({
+      id,
+      name: id,
+      description: "Report the verified Phase 10 Ruflo inventory and server-owned security boundaries.",
+      source: "ruflo",
+      inputSchema: { type: "object", properties: { includeDisabled: { type: "boolean" }, sessionId: { type: "string", maxLength: 120 } }, additionalProperties: false },
+      outputSchema: { type: "object", additionalProperties: true },
+      permissions: ["workspace:read"],
+      riskLevel: "READ_ONLY",
+      timeoutMs: 5_000,
+      enabled: true,
+      approvalRequired: false,
+      agentAccess: { rufloOnly: true, allowedAgentTypes: ["coordinator", "security-auditor", "researcher"] },
+      resourceLimits: { maxInputBytes: 2_000, maxOutputBytes: 32_000, maxResults: 64, maxConcurrentCalls: 4 },
+    });
+  }
   registry.register({
     id: "inspect_repository",
     name: "inspect_repository",
@@ -199,6 +220,11 @@ export function createDefaultRufloToolRegistry(): RufloToolRegistry {
   // Phase 9 adds only adapters whose execution can be routed through existing
   // repository, workspace, memory, audit, and budget boundaries.
   for (const definition of RUFLO_PHASE9_IMPORTED_TOOLS) registry.register(definition);
+  // Phase 10 remains on the same unified registry. Phase 9 identifiers are
+  // already canonical and must not be registered a second time.
+  for (const definition of RUFLO_PHASE10_TOOL_DEFINITIONS) {
+    if (!registry.has(definition.id)) registry.register(definition);
+  }
   return registry;
 }
 

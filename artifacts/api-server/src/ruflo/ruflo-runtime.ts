@@ -8,6 +8,7 @@ import {
   type RepositoryRef,
 } from "../repository/github-provider";
 import {
+  ensureWorkspace,
   inspectWorkspace,
   readWorkspaceFile,
   searchWorkspace,
@@ -38,6 +39,22 @@ import {
   RUFLO_PHASE9_PLUGIN_CAPABILITIES,
   RUFLO_PHASE9_ORIGINAL,
 } from "./ruflo-phase9-catalog";
+import {
+  RUFLO_PHASE10_ADDITIONAL_PLUGIN_DECLARATION_COUNT,
+  RUFLO_PHASE10_DISABLED_DECLARATION_COUNT,
+  RUFLO_PHASE10_ORIGINAL,
+  RUFLO_PHASE10_ORIGINAL_DECLARATION_COUNT,
+} from "./ruflo-phase10-catalog";
+import {
+  closeSafeBrowserPage,
+  closeSandboxedTerminal,
+  createSandboxedTerminal,
+  getSafeBrowserPage,
+  listSafeBrowserSessions,
+  listSandboxedTerminals,
+  openSafeBrowserPage,
+  runSandboxedTerminal,
+} from "./ruflo-phase10-execution";
 
 export const DEFAULT_RUFLO_LIMITS = {
   maxIterations: 8,
@@ -62,18 +79,7 @@ export type RufloWorkspaceRef = {
   projectId: string;
 };
 
-export type RufloToolName =
-  | "inspect_repository"
-  | "search_repository"
-  | "read_file"
-  | "memory_search"
-  | "memory_store"
-  | "memory_cleanup"
-  | "memory_stats"
-  | "agentdb_health"
-  | "guidance_capabilities"
-  | "system_info"
-  | "system_health";
+export type RufloToolName = string;
 
 export type RufloToolRequest = {
   name: RufloToolName;
@@ -407,7 +413,7 @@ export function createRufloToolExecutor(registry: RufloToolRegistry = createDefa
       const startedAt = Date.now();
       let auditStatus: "not_required" | "required" | "approved" = definition.approvalRequired ? "required" : "not_required";
       registry.authorize(request.name, request.input, {
-        permissions: ["repository:read", "workspace:read", "memory:read", "memory:write"],
+        permissions: ["repository:read", "workspace:read", "memory:read", "memory:write", "terminal:execute", "network:outbound"],
         allowLowRisk: false,
         approved: request.approved === true,
       });
@@ -454,6 +460,12 @@ export function createRufloToolExecutor(registry: RufloToolRegistry = createDefa
 }
 
 async function executeNativeRufloTool(request: RufloToolRequest, registry: RufloToolRegistry): Promise<RufloToolResult> {
+      const definition = registry.get(request.name);
+      if (definition.executionAdapter === "disabled") {
+        throw new RufloRuntimeInputError(`Ruflo tool "${request.name}" is disabled because its original authority surface is not available.`);
+      }
+      if (definition.executionAdapter === "sandboxed_terminal") return executePhase10TerminalTool(request);
+      if (definition.executionAdapter === "safe_browser") return executePhase10BrowserTool(request);
       if (request.name === "inspect_repository") {
         if (request.repository) {
           const overview = await getRepositoryOverview(request.repository);
@@ -612,12 +624,21 @@ async function executeNativeRufloTool(request: RufloToolRequest, registry: Ruflo
           data: {
             status: "healthy",
             phase: 9,
+            currentPhase: 10,
             originalRevision: RUFLO_PHASE9_ORIGINAL.revision,
             registeredToolCount: registry.list().length,
             importedAgentCount: RUFLO_PHASE9_IMPORTED_AGENTS.length,
             importedPluginCapabilityCount: RUFLO_PHASE9_PLUGIN_CAPABILITIES.length,
           },
         };
+      }
+
+      if (request.name.startsWith("phase10_")) {
+        return executePhase10ControlTool(request, registry);
+      }
+
+      if (definition.executionAdapter === "bounded_evidence") {
+        return executePhase10EvidenceTool(request, definition);
       }
 
       const query = typeof request.input.query === "string" ? request.input.query.trim().slice(0, 240) : "";
@@ -631,6 +652,205 @@ async function executeNativeRufloTool(request: RufloToolRequest, registry: Ruflo
         data: results.slice(0, 40),
         files: uniquePaths(results.map((result) => result.path)),
       };
+}
+
+async function executePhase10EvidenceTool(
+  request: RufloToolRequest,
+  definition: ReturnType<RufloToolRegistry["get"]>,
+): Promise<RufloToolResult> {
+  const query = typeof request.input.query === "string"
+    ? request.input.query.trim().slice(0, 240)
+    : typeof request.input.text === "string"
+      ? request.input.text.trim().slice(0, 240)
+      : request.task.trim().slice(0, 240);
+  const path = cleanPath(request.input.path);
+  let evidence: unknown = { input: boundValue(request.input), observation: "No repository or workspace evidence was requested." };
+  let files: string[] = [];
+  if (request.repository) {
+    if (path) {
+      const result = await readRepositoryFile(request.repository, path);
+      evidence = { path: result.path, size: result.size, content: result.content.slice(0, 8_000), truncated: result.truncated };
+      files = [result.path];
+    } else if (query) {
+      const results = await searchRepository(request.repository, query);
+      evidence = { query, matches: results.slice(0, 24) };
+      files = uniquePaths(results.map((result) => result.path));
+    } else {
+      const overview = await getRepositoryOverview(request.repository);
+      evidence = compactOverview(overview, overview.entryPoints.slice(0, 12));
+      files = overview.entryPoints.slice(0, 12);
+    }
+  } else if (request.workspace) {
+    if (path) {
+      const result = await readWorkspaceFile(request.workspace.userId, request.workspace.projectId, path);
+      evidence = { path: result.path, size: result.size, content: result.content.slice(0, 8_000) };
+      files = [result.path];
+    } else if (query) {
+      const results = await searchWorkspace(request.workspace.userId, request.workspace.projectId, query);
+      evidence = { query, matches: results.slice(0, 24) };
+      files = uniquePaths(results.map((result) => result.path));
+    } else {
+      const overview = await inspectWorkspace(request.workspace.userId, request.workspace.projectId, [], request.task);
+      evidence = {
+        structure: overview.structure.slice(0, 80),
+        entryPoints: overview.entryPoints.slice(0, 20),
+        context: overview.context.slice(0, 8_000),
+      };
+      files = overview.relevantFiles.slice(0, 20);
+    }
+  }
+  return {
+    name: request.name,
+    summary: `Executed the bounded Phase 10 adapter for ${definition.provenance?.originalToolName ?? definition.name}.`,
+    data: {
+      adapter: "bounded_evidence",
+      originalName: definition.provenance?.originalToolName ?? definition.name,
+      sourcePath: definition.provenance?.sourcePath,
+      license: definition.provenance?.license,
+      reuseMode: definition.provenance?.reuseMode,
+      category: definition.name.split(/[:/_-]/)[0],
+      result: boundValue(evidence),
+    },
+    files,
+  };
+}
+
+async function executePhase10TerminalTool(request: RufloToolRequest): Promise<RufloToolResult> {
+  const userId = request.workspace?.userId ?? "repository-session";
+  if (request.name === "terminal_create") {
+    return { name: request.name, summary: "Created a bounded terminal session.", data: createSandboxedTerminal(userId) };
+  }
+  if (request.name === "terminal_list" || request.name === "terminal_history") {
+    return { name: request.name, summary: "Returned bounded terminal history.", data: listSandboxedTerminals(userId) };
+  }
+  if (request.name === "terminal_close") {
+    return {
+      name: request.name,
+      summary: "Closed the requested bounded terminal session.",
+      data: closeSandboxedTerminal(userId, typeof request.input.sessionId === "string" ? request.input.sessionId : undefined),
+    };
+  }
+  if (!request.workspace) throw new RufloRuntimeInputError("terminal_execute requires a workspace-scoped Ruflo session.");
+  const result = await runSandboxedTerminal({
+    userId,
+    command: request.input.command,
+    args: request.input.args,
+    cwd: await ensureWorkspace(request.workspace.userId, request.workspace.projectId),
+    timeoutMs: 15_000,
+  });
+  return {
+    name: request.name,
+    summary: `Sandboxed ${result.command} exited with code ${result.exitCode}.`,
+    data: boundValue(result),
+  };
+}
+
+async function executePhase10BrowserTool(request: RufloToolRequest): Promise<RufloToolResult> {
+  const sessionId = typeof request.input.sessionId === "string" && request.input.sessionId.trim()
+    ? request.input.sessionId.trim().slice(0, 120)
+    : "browser-session";
+  if (request.name === "browser_session-list") {
+    return { name: request.name, summary: "Returned safe public browser sessions.", data: listSafeBrowserSessions() };
+  }
+  if (request.name === "browser_open") {
+    const url = typeof request.input.url === "string" ? request.input.url : "";
+    const page = await openSafeBrowserPage(sessionId, url);
+    return { name: request.name, summary: `Fetched public page ${page.url}.`, data: page };
+  }
+  const page = getSafeBrowserPage(sessionId);
+  if (request.name === "browser_close") {
+    return { name: request.name, summary: "Closed the safe public browser session.", data: closeSafeBrowserPage(sessionId) };
+  }
+  if (request.name === "browser_reload") {
+    const refreshed = await openSafeBrowserPage(sessionId, page.url);
+    return { name: request.name, summary: "Reloaded the same public HTTPS page.", data: refreshed };
+  }
+  if (request.name === "browser_back" || request.name === "browser_forward") {
+    return { name: request.name, summary: "History navigation is bounded to the current public page.", data: { sessionId: page.sessionId, url: page.url } };
+  }
+  if (request.name === "browser_get-title") return { name: request.name, summary: "Returned the safe browser page title.", data: { title: page.title } };
+  if (request.name === "browser_get-url") return { name: request.name, summary: "Returned the safe browser page URL.", data: { url: page.url } };
+  if (request.name === "browser_get-text" || request.name === "browser_snapshot") {
+    return { name: request.name, summary: "Returned bounded public page text.", data: { sessionId: page.sessionId, url: page.url, title: page.title, text: page.text } };
+  }
+  return { name: request.name, summary: "Safe browser wait completed without navigation.", data: { sessionId: page.sessionId, url: page.url } };
+}
+
+function executePhase10ControlTool(request: RufloToolRequest, registry: RufloToolRegistry): RufloToolResult {
+  const tools = registry.list("ruflo");
+  const enabled = tools.filter((tool) => tool.enabled);
+  const disabled = tools.filter((tool) => !tool.enabled);
+  const base = {
+    phase: 10,
+    original: RUFLO_PHASE10_ORIGINAL,
+    originalDeclarationCount: RUFLO_PHASE10_ORIGINAL_DECLARATION_COUNT,
+    additionalPluginDeclarationCount: RUFLO_PHASE10_ADDITIONAL_PLUGIN_DECLARATION_COUNT,
+    disabledImportedDeclarationCount: RUFLO_PHASE10_DISABLED_DECLARATION_COUNT,
+    registeredToolCount: tools.length,
+    enabledToolCount: enabled.length,
+  };
+  if (request.name === "phase10_provenance") {
+    return {
+      name: request.name,
+      summary: "Returned bounded Phase 10 provenance records.",
+      data: {
+        ...base,
+        tools: enabled.filter((tool) => tool.provenance).slice(0, 64).map((tool) => ({
+          id: tool.id,
+          originalName: tool.provenance?.originalToolName ?? tool.name,
+          sourcePath: tool.provenance?.sourcePath,
+          revision: tool.provenance?.originalRevision,
+          license: tool.provenance?.license,
+          reuseMode: tool.provenance?.reuseMode,
+        })),
+      },
+    };
+  }
+  if (request.name === "phase10_limits") {
+    return {
+      name: request.name,
+      summary: "Returned bounded Phase 10 resource limits.",
+      data: {
+        ...base,
+        limits: enabled.slice(0, 64).map((tool) => ({
+          id: tool.id,
+          timeoutMs: tool.timeoutMs,
+          resourceLimits: tool.resourceLimits,
+          riskLevel: tool.riskLevel,
+          approvalRequired: tool.approvalRequired,
+        })),
+      },
+    };
+  }
+  if (request.name === "phase10_security") {
+    return {
+      name: request.name,
+      summary: "Returned Phase 10 security boundary status.",
+      data: {
+        ...base,
+        disabledToolCount: disabled.length,
+        disabledFamilies: [...new Set(disabled.map((tool) => tool.id.split(/[_:]/)[0]))].sort(),
+        controls: ["unified_registry", "server_authorization", "bounded_schema", "audit_trace", "workspace_boundary", "public_https_ssrf_policy", "fixed_command_terminal"],
+      },
+    };
+  }
+  if (request.name === "phase10_audit") {
+    const sessionId = typeof request.input.sessionId === "string" ? request.input.sessionId.slice(0, 120) : undefined;
+    return {
+      name: request.name,
+      summary: "Returned bounded Phase 10 audit records.",
+      data: { ...base, records: rufloToolAuditLog.list({ sessionId }).slice(-64) },
+    };
+  }
+  return {
+    name: request.name,
+    summary: "Returned the verified Phase 10 tool inventory summary.",
+    data: {
+      ...base,
+      enabledToolIds: enabled.map((tool) => tool.id).slice(0, 400),
+      disabledToolIds: disabled.map((tool) => tool.id).slice(0, 160),
+    },
+  };
 }
 
 function createSession(task: string, input: RufloRunInput, limits: RufloLimits): RufloSession {
