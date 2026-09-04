@@ -2,6 +2,7 @@ import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useRef, useStat
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createChangeProposal, createAgentSession, type AiModel, type AgentSession, type ChangeExecutionResult, type ChangeProposal, type CommitResult, type PushResult, useListAiModels } from '@workspace/api-client-react';
 import { ErrorBoundary } from '@/components/error-boundary';
+import { reportBrowserError } from '@/components/browser-error-overlay';
 import { RepositoryPanel, type RepositoryRef } from '@/components/repository-panel';
 import { ResourceStatusPanel } from '@/components/resource-status-panel';
 import { Toaster } from '@/components/ui/toaster';
@@ -160,9 +161,39 @@ function inlineMarkdown(text: string) {
 }
 
 async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, { credentials: 'include', ...options });
-  const body = await response.json().catch(() => null) as { error?: string } | T | null;
-  if (!response.ok) throw new Error(body && typeof body === 'object' && 'error' in body ? body.error : 'Request failed.');
+  const method = options?.method ?? 'GET';
+  const requestBody = typeof options?.body === 'string' ? options.body : options?.body === undefined ? undefined : String(options.body);
+  let response: Response;
+  try {
+    response = await fetch(url, { credentials: 'include', ...options });
+  } catch (error) {
+    reportBrowserError(error, { source: 'apiJson fetch', http: { method, url, requestBody } });
+    throw error;
+  }
+  const responseBody = await response.text();
+  let body: { error?: string } | T | null = null;
+  try {
+    body = responseBody ? JSON.parse(responseBody) as { error?: string } | T : null;
+  } catch {
+    body = null;
+  }
+  if (!response.ok) {
+    const error = new Error(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : responseBody || 'Request failed.');
+    error.name = 'HttpError';
+    reportBrowserError(error, {
+      source: 'apiJson HTTP response',
+      http: {
+        method,
+        url,
+        requestBody,
+        status: response.status,
+        statusText: response.statusText,
+        responseHeaders: [...response.headers.entries()].map(([key, value]) => `${key}: ${value}`).join('\n'),
+        responseBody,
+      },
+    });
+    throw error;
+  }
   return body as T;
 }
 
@@ -350,6 +381,13 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
          if (buffer.trim()) parseBlock(buffer);
        } catch (error) {
          if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return;
+          reportBrowserError(error, {
+            source: 'Ruflo SSE connection',
+            http: {
+              method: 'GET',
+              url: `/api/ruflo/sessions/${encodeURIComponent(sessionId)}/events`,
+            },
+          });
        }
        if (!cancelled && !terminal) {
          const delay = Math.min(10_000, 1_000 * (2 ** Math.min(attempt, 3)));

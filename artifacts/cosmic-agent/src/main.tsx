@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 
 import App from './App';
 import { ErrorBoundary } from '@/components/error-boundary';
+import { BrowserErrorOverlay } from '@/components/browser-error-overlay';
 
 import './index.css';
 
@@ -11,7 +12,10 @@ createRoot(document.getElementById('root')!, {
     console.error(error, errorInfo.componentStack);
   },
 }).render(
-  <ErrorBoundary>
-    <App />
-  </ErrorBoundary>,
+  <>
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+    <BrowserErrorOverlay />
+  </>,
 );

@@ -4,10 +4,12 @@ import {
   type ErrorInfo,
   type ReactNode,
 } from 'react';
+import { reportBrowserError } from './browser-error-overlay';
 
 export interface ErrorFallbackProps {
   error: Error;
   resetError: () => void;
+  componentStack?: string;
 }
 
 interface ErrorBoundaryProps {
@@ -19,6 +21,7 @@ interface ErrorBoundaryProps {
 
 interface ErrorBoundaryState {
   error: Error | null;
+  componentStack?: string;
 }
 
 function toError(value: unknown): Error {
@@ -35,27 +38,25 @@ function toError(value: unknown): Error {
   }
 }
 
-function DefaultFallback({ error, resetError }: ErrorFallbackProps) {
+function DefaultFallback({ error, resetError, componentStack }: ErrorFallbackProps) {
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50 p-6">
-      <div className="max-w-lg w-full text-center">
-        <h1 className="text-xl font-semibold text-gray-900">
-          Something went wrong
-        </h1>
-        <p className="mt-2 text-sm text-gray-600">
-          This part of the app hit an error. The rest of the app is still
-          running.
-        </p>
-        {/* Dev only: messages can carry API responses and other internals. */}
-        {import.meta.env.DEV ? (
-          <pre className="mt-4 overflow-x-auto rounded bg-gray-100 p-3 text-left text-xs text-gray-800">
-            {error.message || String(error)}
-          </pre>
-        ) : null}
+    <div style={{ minHeight: '100vh', width: '100%', padding: '32px', background: '#fff0f0', color: '#ff0000', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+        <h1 style={{ fontSize: '36px', fontWeight: 900, margin: 0 }}>REACT ERROR</h1>
+        <pre style={{ marginTop: '20px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '22px', lineHeight: 1.45 }}>
+          {`TYPE: ${error.name}
+MESSAGE: ${error.message}
+
+FULL STACK:
+${error.stack ?? String(error)}
+
+REACT COMPONENT STACK:
+${componentStack ?? '(not provided)'}`}
+        </pre>
         <button
           type="button"
           onClick={resetError}
-          className="mt-4 rounded bg-gray-900 px-4 py-2 text-sm text-white hover:bg-gray-700"
+          style={{ marginTop: '20px', background: '#ff0000', color: '#ffffff', border: 0, padding: '12px 18px', fontSize: '18px', fontWeight: 800, cursor: 'pointer' }}
         >
           Try again
         </button>
@@ -75,6 +76,9 @@ export class ErrorBoundary extends Component<
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo): void {
+    const componentStack = info.componentStack ?? undefined;
+    reportBrowserError(error, { source: 'React ErrorBoundary', componentStack });
+    this.setState({ componentStack });
     console.error(
       'ErrorBoundary caught an error:',
       toError(error),
@@ -92,7 +96,7 @@ export class ErrorBoundary extends Component<
   }
 
   resetError = (): void => {
-    this.setState({ error: null });
+    this.setState({ error: null, componentStack: undefined });
   };
 
   render(): ReactNode {
@@ -101,6 +105,6 @@ export class ErrorBoundary extends Component<
       return this.props.children;
     }
     const Fallback = this.props.FallbackComponent ?? DefaultFallback;
-    return <Fallback error={error} resetError={this.resetError} />;
+    return <Fallback error={error} resetError={this.resetError} componentStack={this.state.componentStack} />;
   }
 }
