@@ -11,6 +11,7 @@ import NotFound from '@/pages/not-found';
 import { ChangeProposalReview } from '@/components/change-proposal-review';
 import { PreviewPanel } from '@/components/preview-panel';
 import { ControlCenter } from '@/components/control-center';
+import FileExplorerPage from '@/pages/file-explorer';
 import { acceptRufloLiveEvent, parseRufloSseBlock } from './ruflo-live-client';
 import {
   Aperture, Bot, Check, ChevronDown, CircleAlert, CircleCheck, Code2, Copy, Gauge, LockKeyhole, Menu, MoreHorizontal,
@@ -262,6 +263,7 @@ function GitHubSettings({ onClose, onBack, notify, embedded = false }: { onClose
 }
 
 function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
+  const [, setLocation] = useLocation();
   const { data: providerModels } = useListAiModels();
   const models = providerModels?.filter((model) => model.enabled) ?? fallbackModels;
   const [conversations, setConversations] = useState<Conversation[]>(readConversations);
@@ -616,7 +618,7 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
     <RepositoryPanel open={repositoryOpen} repository={repository} onRepositoryChange={(next) => { setRepository(next); if (!next) setContextPaths([]); }} contextPaths={contextPaths} onAddContext={(path) => setContextPaths((current) => current.includes(path) ? current : [...current, path])} onRemoveContext={(path) => setContextPaths((current) => current.filter((item) => item !== path))} onClose={() => setRepositoryOpen(false)} />
      {resourceOpen && <button className="drawer-overlay resource-overlay" onClick={() => setResourceOpen(false)} aria-label="Close resource status" />}
      <ResourceStatusPanel open={resourceOpen} onClose={() => setResourceOpen(false)} />
-      {settingsOpen && <><button className="drawer-overlay settings-overlay" onClick={() => setSettingsOpen(false)} aria-label="Close settings" /><ControlCenter onClose={() => setSettingsOpen(false)} notify={notify} integrationDetail={(onBack) => <GitHubSettings embedded onBack={onBack} onClose={() => setSettingsOpen(false)} notify={notify} />} /></>}
+      {settingsOpen && <><button className="drawer-overlay settings-overlay" onClick={() => setSettingsOpen(false)} aria-label="Close settings" /><ControlCenter onClose={() => setSettingsOpen(false)} onOpenFiles={() => { setSettingsOpen(false); setLocation('/files'); }} notify={notify} integrationDetail={(onBack) => <GitHubSettings embedded onBack={onBack} onClose={() => setSettingsOpen(false)} notify={notify} />} /></>}
     {toast && <div className="toast-note" role="status">{toast}</div>}
   </div>;
 }
@@ -895,7 +897,7 @@ function PreviewPage() {
   const [, setLocation] = useLocation();
   return <main className="preview-page"><header className="preview-page-header"><Link className="preview-back" href="/"><Aperture size={16} /> Cosmic Agent</Link><div><span className="repo-kicker"><Eye size={12} /> Dedicated application preview</span><strong>Approved project runtime</strong></div><span className="preview-page-id">{proposalId}</span></header><div className="preview-page-content"><PreviewPanel proposalId={proposalId} onClose={() => setLocation('/')} /></div></main>;
 }
-function Router({ user, onLogout }: { user: SessionUser; onLogout: () => void }) { return <ErrorBoundary><Switch><Route path="/" component={() => <Home user={user} onLogout={onLogout} />} /><Route path="/preview/:proposalId" component={PreviewPage} /><Route component={NotFound} /></Switch></ErrorBoundary>; }
+function Router({ user, onLogout }: { user: SessionUser; onLogout: () => void }) { return <ErrorBoundary><Switch><Route path="/" component={() => <Home user={user} onLogout={onLogout} />} /><Route path="/files" component={FileExplorerPage} /><Route path="/preview/:proposalId" component={PreviewPage} /><Route component={NotFound} /></Switch></ErrorBoundary>; }
 function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checking, setChecking] = useState(true);

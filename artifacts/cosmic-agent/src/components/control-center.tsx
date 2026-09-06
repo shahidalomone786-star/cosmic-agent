@@ -30,6 +30,7 @@ import {
   FileCode2,
   FilePlus,
   FileText,
+  ExternalLink,
   FolderOpen,
   GitBranch,
   Github,
@@ -89,10 +90,12 @@ type PanelView = 'overview' | string;
 
 export function ControlCenter({
   onClose,
+  onOpenFiles,
   notify,
   integrationDetail,
 }: {
   onClose: () => void;
+  onOpenFiles?: () => void;
   notify: (message: string) => void;
   integrationDetail?: (onBack: () => void) => ReactNode;
 }) {
@@ -159,9 +162,12 @@ export function ControlCenter({
                 ? <div className="control-nav-item disabled" aria-disabled="true" key={module.id} data-testid={`status-control-module-${module.id}`}>
                     <Icon size={14} /><span>{module.label}</span><CircleOff size={12} />
                   </div>
-                : <button className={`control-nav-item ${view === module.id ? 'active' : ''}`} onClick={() => selectView(module.id)} key={module.id} data-testid={`button-control-module-${module.id}`}>
-                    <Icon size={14} /><span>{module.label}</span><ChevronRight size={12} />
-                  </button>;
+                : <div className={`control-nav-item-wrap ${module.id === 'files' ? 'has-external' : ''}`} key={module.id}>
+                    <button className={`control-nav-item ${view === module.id ? 'active' : ''}`} onClick={() => selectView(module.id)} data-testid={`button-control-module-${module.id}`}>
+                      <Icon size={14} /><span>{module.label}</span><ChevronRight size={12} />
+                    </button>
+                    {module.id === 'files' && onOpenFiles && <button type="button" className="control-nav-external" onClick={onOpenFiles} aria-label="Open dedicated File Explorer" data-testid="button-open-file-explorer"><ExternalLink size={12} /></button>}
+                  </div>;
             })}
           </div>
         </section>)}
