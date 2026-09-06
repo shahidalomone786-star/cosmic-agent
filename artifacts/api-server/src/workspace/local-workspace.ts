@@ -148,7 +148,10 @@ export async function assertWorkspacePath(base: string, relative: string, follow
   const absolute = path.resolve(base, relative);
   if (!isWithin(canonicalBase, absolute)) throw new Error("Workspace path escaped its boundary.");
 
-  const candidate = followFinal ? absolute : path.dirname(absolute);
+  // "." identifies the workspace root itself. Treat it as the final
+  // directory so callers can validate a top-level create/save parent without
+  // accidentally checking the workspace's parent directory.
+  const candidate = followFinal || relative === "." || relative === "" ? absolute : path.dirname(absolute);
   const existing = await nearestExistingPath(candidate);
   const canonicalExisting = await fs.realpath(existing);
   if (!isWithin(canonicalBase, canonicalExisting)) throw new Error("Workspace symlink escaped its boundary.");
