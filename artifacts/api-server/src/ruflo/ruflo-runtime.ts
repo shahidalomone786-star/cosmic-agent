@@ -55,6 +55,7 @@ import {
   openSafeBrowserPage,
   runSandboxedTerminal,
 } from "./ruflo-phase10-execution";
+import { executePhase11NativeTool, executePhase11PluginAdapter } from "./ruflo-phase11-native";
 
 export const DEFAULT_RUFLO_LIMITS = {
   maxIterations: 8,
@@ -93,6 +94,10 @@ export type RufloToolRequest = {
   task: string;
   sessionId?: string;
   approved?: boolean;
+  agentId?: string;
+  jobId?: string;
+  requestId?: string;
+  userId?: string;
 };
 
 export type RufloToolResult = {
@@ -399,6 +404,7 @@ export function createRufloToolExecutor(registry: RufloToolRegistry = createDefa
         "inspect_repository",
         "search_repository",
         "read_file",
+        "workflow_validate",
         "memory_search",
         "memory_store",
         "memory_cleanup",
@@ -408,8 +414,9 @@ export function createRufloToolExecutor(registry: RufloToolRegistry = createDefa
       if (requiresWorkspace.has(request.name) && !request.repository && !request.workspace) {
         throw new RufloRuntimeInputError("A connected repository or workspace is required for Ruflo inspection.");
       }
-      const userId = request.workspace?.userId ?? "repository-session";
+      const userId = request.userId ?? request.workspace?.userId ?? "repository-session";
       const sessionId = request.sessionId ?? "runtime-session";
+      const requestId = request.requestId ?? randomUUID();
       const startedAt = Date.now();
       let auditStatus: "not_required" | "required" | "approved" = definition.approvalRequired ? "required" : "not_required";
       registry.authorize(request.name, request.input, {
@@ -417,24 +424,42 @@ export function createRufloToolExecutor(registry: RufloToolRegistry = createDefa
         allowLowRisk: false,
         approved: request.approved === true,
       });
+      const inputBytes = Buffer.byteLength(JSON.stringify(request.input ?? {}), "utf8");
+      const maxInputBytes = definition.resourceLimits?.maxInputBytes ?? 12_000;
+      if (inputBytes > maxInputBytes) {
+        throw new RufloRuntimeInputError(`Ruflo tool "${request.name}" input exceeds its bounded resource limit.`);
+      }
       auditStatus = definition.approvalRequired ? "approved" : "not_required";
       rufloToolAuditLog.record({
         sessionId,
         userId,
+        agentId: request.agentId,
+        jobId: request.jobId,
+        requestId,
         toolId: request.name,
         source: definition.source,
+        implementationKind: definition.implementationKind,
+        sourceRevision: definition.originalRevision,
         riskLevel: definition.riskLevel,
         approvalStatus: auditStatus,
         executionStatus: "authorized",
       });
 
       try {
-        const result = await executeNativeRufloTool(request, registry);
+        const result = await withToolTimeout(executeNativeRufloTool(request, registry), definition.timeoutMs);
+        const outputBytes = Buffer.byteLength(JSON.stringify(result.data ?? null), "utf8");
+        const maxOutputBytes = definition.resourceLimits?.maxOutputBytes ?? 32_000;
+        if (outputBytes > maxOutputBytes) throw new RufloRuntimeInputError(`Ruflo tool "${request.name}" output exceeded its bounded resource limit.`);
         rufloToolAuditLog.record({
           sessionId,
           userId,
+          agentId: request.agentId,
+          jobId: request.jobId,
+          requestId,
           toolId: request.name,
           source: definition.source,
+          implementationKind: definition.implementationKind,
+          sourceRevision: definition.originalRevision,
           riskLevel: definition.riskLevel,
           approvalStatus: auditStatus,
           executionStatus: "completed",
@@ -445,8 +470,13 @@ export function createRufloToolExecutor(registry: RufloToolRegistry = createDefa
         rufloToolAuditLog.record({
           sessionId,
           userId,
+          agentId: request.agentId,
+          jobId: request.jobId,
+          requestId,
           toolId: request.name,
           source: definition.source,
+          implementationKind: definition.implementationKind,
+          sourceRevision: definition.originalRevision,
           riskLevel: definition.riskLevel,
           approvalStatus: auditStatus,
           executionStatus: "failed",
@@ -459,6 +489,10 @@ export function createRufloToolExecutor(registry: RufloToolRegistry = createDefa
   };
 }
 
+export function listRufloAuditRecords(filter: { sessionId?: string; userId?: string } = {}) {
+  return rufloToolAuditLog.list(filter);
+}
+
 async function executeNativeRufloTool(request: RufloToolRequest, registry: RufloToolRegistry): Promise<RufloToolResult> {
       const definition = registry.get(request.name);
       if (definition.executionAdapter === "disabled") {
@@ -466,6 +500,10 @@ async function executeNativeRufloTool(request: RufloToolRequest, registry: Ruflo
       }
       if (definition.executionAdapter === "sandboxed_terminal") return executePhase10TerminalTool(request);
       if (definition.executionAdapter === "safe_browser") return executePhase10BrowserTool(request);
+      if (definition.executionAdapter === "native") {
+        return executePhase11NativeTool(request, registry, { readRepositoryFile, readWorkspaceFile });
+      }
+      if (definition.executionAdapter === "safe_plugin") return executePhase11PluginAdapter(request);
       if (request.name === "inspect_repository") {
         if (request.repository) {
           const overview = await getRepositoryOverview(request.repository);
@@ -652,6 +690,20 @@ async function executeNativeRufloTool(request: RufloToolRequest, registry: Ruflo
         data: results.slice(0, 40),
         files: uniquePaths(results.map((result) => result.path)),
       };
+}
+
+async function withToolTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new RufloRuntimeInputError("Ruflo tool execution exceeded its bounded timeout.")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function executePhase10EvidenceTool(

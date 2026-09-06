@@ -6,8 +6,13 @@ export type RufloToolAuditRecord = {
   sessionId: string;
   taskId?: string;
   userId: string;
+  agentId?: string;
+  jobId?: string;
+  requestId?: string;
   toolId: string;
   source: RufloToolSource;
+  implementationKind?: string;
+  sourceRevision?: string;
   mcpServer?: string;
   timestamp: string;
   riskLevel: RufloRiskLevel;
@@ -30,8 +35,13 @@ export class RufloToolAuditLog {
       sessionId: record.sessionId.slice(0, 120),
       taskId: record.taskId?.slice(0, 120),
       userId: record.userId.slice(0, 200),
+      agentId: record.agentId?.slice(0, 120),
+      jobId: record.jobId?.slice(0, 120),
+      requestId: record.requestId?.slice(0, 120),
       toolId: record.toolId.slice(0, 160),
       mcpServer: record.mcpServer?.slice(0, 120),
+      implementationKind: record.implementationKind?.slice(0, 40),
+      sourceRevision: record.sourceRevision?.slice(0, 80),
       errorCategory: record.errorCategory?.slice(0, 80),
     };
     this.records.push(safe);

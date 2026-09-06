@@ -1,5 +1,9 @@
 import { RUFLO_PHASE9_IMPORTED_TOOLS } from "./ruflo-phase9-catalog";
 import { RUFLO_PHASE10_TOOL_DEFINITIONS } from "./ruflo-phase10-catalog";
+import {
+  RUFLO_PHASE11_NATIVE_TOOL_DEFINITIONS,
+  RUFLO_PHASE11_PLUGIN_TOOL_DEFINITIONS,
+} from "./ruflo-phase11-native";
 
 export const RUFLO_RISK_LEVELS = [
   "READ_ONLY",
@@ -20,6 +24,11 @@ export type RufloToolPermission =
   | "mcp:read"
   | "mcp:write"
   | "network:outbound";
+
+export type RufloImplementationKind = "native" | "cosmic-adapter" | "metadata-only" | "disabled";
+export type RufloExecutionMode = "in_process_read_only" | "in_process_bounded" | "bounded_subprocess" | "network_read_only" | "metadata";
+export type RufloTestStatus = "verified" | "partial" | "unverified";
+export type RufloParityStatus = "verified" | "partial" | "metadata-only" | "disabled" | "not-verified";
 
 export type RufloJsonSchema = {
   type?: "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
@@ -55,6 +64,15 @@ export type RufloUnifiedToolDefinition = {
     reuseMode: "adapted" | "native" | "metadata_only";
     originalToolName?: string;
   };
+  implementationKind?: RufloImplementationKind;
+  originalSource?: string;
+  originalRevision?: string;
+  originalBehaviorReference?: string;
+  cosmicImplementation?: string;
+  risk?: RufloRiskLevel;
+  executionMode?: RufloExecutionMode;
+  testStatus?: RufloTestStatus;
+  parityStatus?: RufloParityStatus;
   agentAccess?: {
     rufloOnly: true;
     allowedAgentTypes: string[];
@@ -65,7 +83,7 @@ export type RufloUnifiedToolDefinition = {
     maxResults: number;
     maxConcurrentCalls: number;
   };
-  executionAdapter?: "bounded_evidence" | "sandboxed_terminal" | "safe_browser" | "disabled";
+  executionAdapter?: "native" | "safe_plugin" | "bounded_evidence" | "sandboxed_terminal" | "safe_browser" | "disabled";
   availability?: "enabled" | "disabled";
 };
 
@@ -84,7 +102,9 @@ export class RufloToolRegistryError extends Error {
       | "tool_disabled"
       | "permission_denied"
       | "approval_required"
-      | "schema_invalid",
+      | "schema_invalid"
+      | "resource_limit"
+      | "execution_timeout",
     message: string,
   ) {
     super(message);
@@ -100,14 +120,14 @@ export class RufloToolRegistry {
     if (this.tools.has(definition.id)) {
       throw new RufloToolRegistryError("duplicate_tool", `Ruflo tool "${definition.id}" is already registered.`);
     }
-    const copy = cloneDefinition(definition);
+    const copy = normalizeDefinition(definition);
     this.tools.set(copy.id, copy);
     return cloneDefinition(copy);
   }
 
   registerOrReplace(definition: RufloUnifiedToolDefinition): RufloUnifiedToolDefinition {
     validateDefinition(definition);
-    const copy = cloneDefinition(definition);
+    const copy = normalizeDefinition(definition);
     this.tools.set(copy.id, copy);
     return cloneDefinition(copy);
   }
@@ -225,6 +245,8 @@ export function createDefaultRufloToolRegistry(): RufloToolRegistry {
   for (const definition of RUFLO_PHASE10_TOOL_DEFINITIONS) {
     if (!registry.has(definition.id)) registry.register(definition);
   }
+  for (const definition of RUFLO_PHASE11_NATIVE_TOOL_DEFINITIONS) registry.registerOrReplace(definition);
+  for (const definition of RUFLO_PHASE11_PLUGIN_TOOL_DEFINITIONS) registry.registerOrReplace(definition);
   return registry;
 }
 
@@ -289,6 +311,38 @@ function validateDefinition(definition: RufloUnifiedToolDefinition): void {
   if (definition.permissions.length === 0) {
     throw new RufloToolRegistryError("invalid_definition", `Ruflo tool "${definition.id}" must declare permissions.`);
   }
+}
+
+function normalizeDefinition(definition: RufloUnifiedToolDefinition): RufloUnifiedToolDefinition {
+  const disabled = definition.enabled === false || definition.availability === "disabled" || definition.executionAdapter === "disabled";
+  const implementationKind = definition.implementationKind
+    ?? (disabled ? (definition.executionAdapter === "disabled" ? "disabled" : definition.provenance?.reuseMode === "metadata_only" ? "metadata-only" : "disabled")
+      : definition.executionAdapter === "bounded_evidence" ? "cosmic-adapter" : "cosmic-adapter");
+  return {
+    ...definition,
+    implementationKind,
+    originalSource: definition.originalSource ?? definition.provenance?.sourcePath ?? "cosmic-agent",
+    originalRevision: definition.originalRevision ?? definition.provenance?.originalRevision ?? "not-applicable",
+    originalBehaviorReference: definition.originalBehaviorReference
+      ?? (definition.provenance?.originalToolName
+        ? `${definition.provenance.sourcePath} :: ${definition.provenance.originalToolName}`
+        : "No original behavior reference; Cosmic capability only."),
+    cosmicImplementation: definition.cosmicImplementation ?? definition.executionAdapter ?? "server-owned",
+    risk: definition.risk ?? definition.riskLevel,
+    resourceLimits: definition.resourceLimits ?? {
+      maxInputBytes: 12_000,
+      maxOutputBytes: 32_000,
+      maxResults: 48,
+      maxConcurrentCalls: 2,
+    },
+    executionMode: definition.executionMode
+      ?? (definition.executionAdapter === "safe_browser" ? "network_read_only"
+        : definition.executionAdapter === "sandboxed_terminal" ? "bounded_subprocess"
+          : disabled ? "metadata" : "in_process_bounded"),
+    testStatus: definition.testStatus ?? "unverified",
+    parityStatus: definition.parityStatus
+      ?? (disabled ? (implementationKind === "metadata-only" ? "metadata-only" : "disabled") : "partial"),
+  };
 }
 
 function cloneDefinition(definition: RufloUnifiedToolDefinition): RufloUnifiedToolDefinition {

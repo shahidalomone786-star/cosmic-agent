@@ -57,12 +57,12 @@ test("keeps approval and schema controls on adapted memory tools", () => {
   );
 });
 
-test("executes a safe adapted system tool through the existing bounded executor", async () => {
+test("executes the Phase 11 native system tool through the existing bounded executor", async () => {
   const executor = createRufloToolExecutor();
   const result = await executor.execute({ name: "system_info", input: {}, task: "catalog health check", sessionId: "phase9-test" });
   assert.equal(result.name, "system_info");
-  assert.equal(result.data.phase, 9);
-  assert.equal(result.data.originalRevision, catalog.RUFLO_PHASE9_ORIGINAL.revision);
+  assert.equal(result.data.features.swarm, true);
+  assert.equal(result.data.limits.maxAgents, 5);
 });
 
 test("keeps authority-heavy original tools explicitly disabled", () => {

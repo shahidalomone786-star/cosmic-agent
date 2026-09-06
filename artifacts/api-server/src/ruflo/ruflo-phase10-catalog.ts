@@ -574,6 +574,7 @@ function makeTool(id: string, originalName = id, explicitSourcePath?: string): R
     resourceLimits: adapter === "sandboxed_terminal" ? { ...resourceLimits, maxConcurrentCalls: 1 } : id.startsWith("memory") ? memoryResourceLimits : resourceLimits,
     availability: reason ? "disabled" : "enabled",
     executionAdapter: adapter,
+    implementationKind: reason && (id.startsWith("wasm_") || id.startsWith("transfer_")) ? "metadata-only" : undefined,
   };
 }
 

@@ -64,8 +64,10 @@ test("executes adapted tools, writes audit traces, and bounds the result", async
     sessionId: "phase10-test",
   });
   assert.equal(result.name, "aqe:security-scan");
-  assert.equal(result.data.adapter, "bounded_evidence");
-  assert.equal(result.data.license, "MIT");
+  assert.equal(result.data.adapter, "safe_plugin");
+  assert.equal(result.data.plugin, "agentic-qe");
+  assert.equal(result.data.networkAccess, false);
+  assert.equal(result.data.executedCode, false);
   assert.ok(JSON.stringify(result).length < 32_000);
 });
 

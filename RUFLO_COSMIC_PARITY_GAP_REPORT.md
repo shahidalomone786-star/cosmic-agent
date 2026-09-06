@@ -13,21 +13,25 @@ The current implementation has a real, integrated Ruflo-shaped runtime:
 - 378 unified Ruflo registry identifiers;
 - 300 enabled registry entries;
 - 78 explicitly disabled entries;
+- 7 behavior-tested native handlers;
+- 293 Cosmic adapters, 38 metadata-only entries, and 40 explicitly disabled
+  implementation classifications;
 - 277 original primary declarations audited;
 - 91 additional MIT plugin declarations audited;
 - authenticated sessions, bounded jobs, durable memory, workflow phases, Git/GitHub review gates, approval-bound writes, audit records, and a live UI;
-- 5 focused Phase 10 tests, 6 Phase 9 tests, and 153 full API tests passing in the prior verification;
+- 5 focused Phase 10 tests, 6 focused Phase 11 tests, 6 Phase 9 tests, and 159 full API tests passing in the current verification;
 - typecheck, build, LSP, startup, and diff checks passing in the prior verification.
 
-Those counts must not be interpreted as 300 implementations of original Ruflo behavior. A large portion of the Phase 10 surface is a provenance-preserving, bounded evidence adapter: it validates a schema, records authorization and audit metadata, and returns a bounded adapter result. It does not reproduce the original algorithm, provider, external service, worker, CLI, or side effect. Generic adapters are therefore classified as **PARTIAL** or **METADATA-ONLY**, not as full parity.
+Those counts must not be interpreted as 300 implementations of original Ruflo behavior. Only 7 entries currently have explicit native handlers and behavior tests. A large portion of the Phase 10 surface is a provenance-preserving, bounded evidence adapter: it validates a schema, records authorization and audit metadata, and returns a bounded adapter result. It does not reproduce the original algorithm, provider, external service, worker, CLI, or side effect. Generic adapters are therefore classified as **PARTIAL** or **METADATA-ONLY**, not as full parity.
 
 The most important parity conclusions are:
 
 1. **Core Cosmic Agent execution and safety architecture is intentionally different.** Proposal creation, user approval, repository snapshot binding, apply, commit, push, durable sessions, and the live UI are Cosmic Agent capabilities, not original Ruflo parity.
 2. **The original Ruflo runtime is substantially broader.** It includes native MCP servers and tools, a large CLI, browser automation, terminal and shell execution, workers and hooks, federation, SONA and ReasoningBank learning, plugin runtimes, marketplace/IPFS surfaces, WASM agents, hive-mind authority, and many provider integrations.
 3. **The current catalog gives good provenance coverage but not behavioral parity.** Original source paths are represented, while many original capabilities are intentionally disabled or reduced to bounded evidence.
-4. **Some original authority surfaces should not be copied into Cosmic Agent.** Unrestricted shell/browser access, arbitrary network access, native process spawning, marketplace/IPFS transfers, unbounded federation, WASM execution, and autonomous write authority conflict with the existing approval and security model.
-5. **Parity work should be selective.** The highest-value compatible additions are read-only introspection, bounded tool semantics, workflow/worker observability, explicit provider and memory interfaces, and a compatibility layer that clearly distinguishes adapted tools from original implementations.
+4. **Phase 11 establishes a narrow native slice.** `system_status`, `system_metrics`, `system_health`, `system_info`, `mcp_status`, `task_summary`, and `workflow_validate` have server-owned handlers, bounded inputs/outputs/timeouts, correlated redacted audit records, and focused tests.
+5. **Some original authority surfaces should not be copied into Cosmic Agent.** Unrestricted shell/browser access, arbitrary network access, native process spawning, marketplace/IPFS transfers, unbounded federation, WASM execution, and autonomous write authority conflict with the existing approval and security model.
+6. **Parity work should be selective.** The highest-value compatible additions are read-only introspection, bounded tool semantics, workflow/worker observability, explicit provider and memory interfaces, and a compatibility layer that clearly distinguishes adapted tools from original implementations.
 
 ## 2. Method and evidence standard
 
@@ -63,8 +67,8 @@ Every finding in this report uses exactly one of the following classifications:
 
 | Area | Classification | Current evidence | Original Ruflo evidence / gap |
 |---|---|---|---|
-| Unified tool registry and schemas | PARTIAL | `ruflo-tool-registry.ts`, `ruflo-phase10-catalog.ts`, `ruflo-runtime.ts` | Original tools are represented, but many are generic adapters rather than native handlers. |
-| Original native MCP tool behavior | MISSING / PARTIAL | A small set of native Cosmic tools plus Phase 10 adapters | 48 native MCP source files under `v3/@claude-flow/cli/src/mcp-tools/`; no equivalent native runtime for the full set. |
+| Unified tool registry and schemas | PARTIAL | `ruflo-tool-registry.ts`, `ruflo-phase10-catalog.ts`, `ruflo-phase11-native.ts`, `ruflo-runtime.ts` | All entries now carry implementation classification and limits, but most remain adapters or disabled metadata. |
+| Original native MCP tool behavior | PARTIAL | 7 bounded native handlers plus Phase 10 adapters | 48 native MCP source files under `v3/@claude-flow/cli/src/mcp-tools/`; only a narrow read-only subset has behavior-level coverage. |
 | Tool permissions, authorization, and audit | IMPLEMENTED within Cosmic boundary | Runtime authorization and audit records; Phase 10 tests | Not a direct Ruflo parity claim; this is a stronger/different Cosmic safety boundary. |
 | Agent metadata | METADATA-ONLY / PARTIAL | Specialized agents and imported catalog metadata | Original plugin agents, CLI agents, and runtime agent implementations are not all executable. |
 | Specialized test/documentation/Git/browser agents | PARTIAL | `ruflo-specialized-agents.ts`, `runRufloSpecializedDag` | Original agents and plugin agents have different prompts, tools, and runtime semantics. |
@@ -99,19 +103,19 @@ Current evidence:
 - `artifacts/api-server/src/ruflo/ruflo-phase10-catalog.ts` defines the Phase 10 declarations and provenance.
 - `artifacts/api-server/src/ruflo/ruflo-tool-registry.ts` merges the catalog into the unified registry.
 - `artifacts/api-server/src/ruflo/ruflo-runtime.ts` performs lookup, authorization, audit, and dispatch.
-- The verified inventory is 378 identifiers, of which 300 are enabled and 78 disabled.
+- The verified inventory is 378 identifiers, of which 300 are enabled and 78 disabled. The implementation classification is 7 native, 293 cosmic-adapter, 38 metadata-only, and 40 disabled.
 
 The registry is a useful compatibility and governance layer. It preserves original source references, names, schemas, permissions, limits, and availability decisions. It is not equivalent to loading the original tool implementation. The current adapter route intentionally returns bounded evidence for many declarations. The report therefore counts this as partial parity, not full parity.
 
 Parity requirement:
 
 1. Keep one canonical registry.
-2. Add an explicit implementation-kind field such as `native`, `cosmic-adapter`, `metadata-only`, or `disabled`.
-3. Require a native handler contract and behavior tests before classifying an entry as **IMPLEMENTED**.
+2. Add an explicit implementation-kind field such as `native`, `cosmic-adapter`, `metadata-only`, or `disabled`. **Completed in Phase 11.**
+3. Require a native handler contract and behavior tests before classifying an entry as **IMPLEMENTED**. **Completed for the 7 native entries; remaining entries are not promoted.**
 4. Keep source provenance separate from implementation provenance.
 5. Do not advertise catalog count as native tool count.
 
-Priority: **P0 for reporting correctness; P1 for compatible native read-only tools.**
+Priority: **P0 for reporting correctness; P1 for extending compatible native read-only tools.**
 
 ### 4.2 Native MCP tools
 
