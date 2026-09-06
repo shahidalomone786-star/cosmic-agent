@@ -217,13 +217,13 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: SessionUser) 
     try {
       const result = await apiJson<{ user: SessionUser }>(`/api/auth/${mode}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
       onAuthenticated(result.user);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not authenticate.'); }
+      } catch (cause) { setError(friendlyAuthError(cause)); }
     finally { setBusy(false); }
   };
   return <main className="auth-shell"><section className="auth-card">
     <div className="auth-brand"><div className="brand-mark"><Aperture size={17} /></div><span>Cosmic Agent</span></div>
     <div className="auth-heading"><span className="repo-kicker"><LogIn size={12} /> Private workspace</span><h1>{mode === 'login' ? 'Welcome back' : 'Create your workspace'}</h1><p>{mode === 'login' ? 'Sign in to continue your private, reviewable coding sessions.' : 'Create an account to keep your sessions and integrations private.'}</p></div>
-    <form className="auth-form" onSubmit={submit}><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={8} required /></label>{error && <div className="auth-error" role="alert">{error}</div>}<button className="auth-submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={15} /> : <LogIn size={15} />}{mode === 'login' ? 'Sign in' : 'Register'}</button></form>
+     <form className="auth-form" onSubmit={submit}><label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={8} required /></label>{error && <div className="auth-error" role="alert" aria-live="polite">{error}</div>}<button className="auth-submit" disabled={busy} aria-busy={busy}>{busy ? <LoaderCircle className="spin" size={15} /> : <LogIn size={15} />}{mode === 'login' ? 'Sign in' : 'Register'}</button></form>
     <button className="auth-switch" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}>{mode === 'login' ? 'Need an account? Register' : 'Already have an account? Sign in'}</button>
   </section></main>;
 }
@@ -877,6 +877,13 @@ function AgentTimeline({ session, model }: { session: RuntimeSession; model: AiM
 }
 function MessageBubble({ message, onRetry, onEdit }: { message: ChatMessage; onRetry: () => void; onEdit: (text: string) => void }) {
   return <article className={`message ${message.role} ${message.error ? 'error' : ''}`}><div className="message-avatar">{message.role === 'assistant' ? <Aperture size={15} /> : 'AR'}</div><div className="message-content"><div className="message-label"><strong>{message.role === 'assistant' ? 'Cosmic Agent' : 'You'}</strong><span>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>{message.error ? <div className="error-panel"><p>{message.content}</p><button onClick={onRetry}><RefreshCw size={14} /> Retry</button></div> : message.role === 'assistant' ? <><Markdown content={message.content} /><SourceUsage usage={message.repositoryContext} /></> : <p className="user-text">{message.content}</p>}{message.streaming && <span className="generation-cursor" aria-label="Generating response" />}{!message.streaming && <div className="message-actions"><button onClick={() => copyText(message.content)} aria-label="Copy message"><Copy size={13} /> Copy</button>{message.role === 'assistant' ? <><button onClick={onRetry}><RefreshCw size={13} /> Regenerate</button></> : <button onClick={() => onEdit(message.content)}><Pencil size={13} /> Edit</button>}</div>}</div></article>;
+}
+function friendlyAuthError(cause: unknown) {
+  const message = cause instanceof Error ? cause.message.toLowerCase() : '';
+  if (message.includes('already') || message.includes('exists')) return 'An account with that email already exists. Try signing in instead.';
+  if (message.includes('invalid') || message.includes('credential') || message.includes('password') || message.includes('401')) return 'Those sign-in details were not accepted. Check your email and password and try again.';
+  if (message.includes('network') || message.includes('fetch') || message.includes('connect')) return 'We could not connect to the workspace. Check your connection and try again.';
+  return 'We could not complete that sign-in. Please try again.';
 }
 function friendlyError(message: string) { const lower = message.toLowerCase(); if (lower.includes('rate') || lower.includes('limit')) return 'The provider is temporarily busy. Please wait a moment and try again.'; if (lower.includes('unavailable') || lower.includes('configured')) return 'This model is unavailable right now. Try another model from the selector.'; return 'We could not reach the provider. Check your connection and try again.'; }
 function isCodingRequest(text: string) {

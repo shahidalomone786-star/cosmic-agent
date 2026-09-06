@@ -113,7 +113,7 @@ body {
   transition: var(--transition);
 }
 
-.nav-links a:hover {
+.nav-links a:hover 
   color: var(--color-text);
 }
 
