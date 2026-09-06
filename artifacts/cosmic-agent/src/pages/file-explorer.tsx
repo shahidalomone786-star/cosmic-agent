@@ -337,7 +337,7 @@ export default function FileExplorerPage() {
           </div>}
         </aside>
 
-        <section className="file-explorer-editor" aria-label="File editor">
+        <section className={`file-explorer-editor ${selectedFile ? 'has-selection' : 'is-empty'}`} aria-label="File editor">
           <div className="file-editor-toolbar">
             <div className="file-editor-breadcrumbs">
               <span className={`source-pill ${source}`}><span className="source-dot" />{source === 'workspace' ? 'Workspace' : 'GitHub'}</span>
