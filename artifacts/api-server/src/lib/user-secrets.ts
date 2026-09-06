@@ -26,11 +26,17 @@ export function maskSecretValue(value: string): string {
 }
 
 function toMetadata(secret: Pick<SecretRow, "id" | "name" | "encryptedValue" | "nonce" | "authTag" | "createdAt" | "lastUsedAt">): SecretMetadata {
-  const value = decryptGitHubToken(secret.encryptedValue, secret.nonce, secret.authTag);
+  let maskedValue = "••••";
+  try {
+    maskedValue = maskSecretValue(decryptGitHubToken(secret.encryptedValue, secret.nonce, secret.authTag));
+  } catch {
+    // Preserve the row so authenticated users can still rotate or delete a
+    // value that was encrypted under an unavailable or rotated key.
+  }
   return {
     id: secret.id,
     name: secret.name,
-    maskedValue: maskSecretValue(value),
+    maskedValue,
     createdAt: secret.createdAt.toISOString(),
     lastUsedAt: secret.lastUsedAt?.toISOString() ?? null,
   };

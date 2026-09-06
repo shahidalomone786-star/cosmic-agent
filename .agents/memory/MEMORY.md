@@ -17,3 +17,4 @@
 - [Phase 10 executable inventory](phase10-executable-inventory.md) — Count only enabled, bounded, audited adapters; preserve unsupported source capabilities as disabled provenance.
 - [Phase 11 native boundary](phase11-native-boundary.md) — Keep registry imports lightweight; inject repository/workspace readers only at runtime.
 - [Phase 12 orchestration boundary](phase12-orchestration-boundary.md) — Extend the existing planner, DAG, registry, memory, activity, and approval systems; do not create parallel authority infrastructure.
+- [Snapshot secret decryption](snapshot-secret-decryption.md) — One undecryptable stored secret must not take down the authenticated capability snapshot.
