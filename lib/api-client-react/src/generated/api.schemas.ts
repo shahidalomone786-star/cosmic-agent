@@ -1114,6 +1114,60 @@ export interface RepositoryOverview {
   architecture: RepositoryOverviewArchitectureItem[];
 }
 
+export type ControlCenterSnapshotOverallStatus = typeof ControlCenterSnapshotOverallStatus[keyof typeof ControlCenterSnapshotOverallStatus];
+
+
+export const ControlCenterSnapshotOverallStatus = {
+  operational: 'operational',
+  attention: 'attention',
+  restricted: 'restricted',
+} as const;
+
+export type ControlCenterModuleCounts = {[key: string]: number};
+
+export interface ControlCenterModule {
+  id: string;
+  label: string;
+  status: string;
+  classification: string;
+  reason: string;
+  permissions: string[];
+  activity: string[];
+  configuration: string[];
+  diagnostics: string[];
+  counts: ControlCenterModuleCounts;
+}
+
+export interface ControlCenterCategory {
+  id: string;
+  label: string;
+  modules: ControlCenterModule[];
+}
+
+export type ControlCenterActivityTone = typeof ControlCenterActivityTone[keyof typeof ControlCenterActivityTone];
+
+
+export const ControlCenterActivityTone = {
+  neutral: 'neutral',
+  positive: 'positive',
+  warning: 'warning',
+  danger: 'danger',
+} as const;
+
+export interface ControlCenterActivity {
+  label: string;
+  detail: string;
+  timestamp: string;
+  tone: ControlCenterActivityTone;
+}
+
+export interface ControlCenterSnapshot {
+  generatedAt: string;
+  overallStatus: ControlCenterSnapshotOverallStatus;
+  categories: ControlCenterCategory[];
+  activity: ControlCenterActivity[];
+}
+
 export type RequestAgentTool200 = { [key: string]: unknown };
 
 export type SubmitWorkerReport200 = {

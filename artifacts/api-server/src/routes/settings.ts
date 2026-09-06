@@ -2,6 +2,10 @@ import { Router, type IRouter } from "express";
 import { getGitHubCredential, getGitHubCredentialStatus, removeGitHubCredential, saveGitHubCredential, updateGitHubCredentialStatus } from "../lib/github-credentials";
 import { requireAuthenticatedUser } from "../middlewares/auth-middleware";
 import { validateGitHubToken } from "../repository/github-provider";
+import { providerManager } from "../ai/provider-manager";
+import { createDefaultRufloToolRegistry } from "../ruflo/ruflo-tool-registry";
+import { listRufloAuditRecords } from "../ruflo/ruflo-runtime";
+import { buildControlCenterSnapshot } from "../ruflo/ruflo-control-center";
 
 const router: IRouter = Router();
 const safe = (status: "connected" | "invalid" | "rate_limited" | "unavailable") => ({ connected: status === "connected", status });
@@ -52,6 +56,22 @@ router.delete("/settings/github", async (req, res): Promise<void> => {
   if (!user) return;
   await removeGitHubCredential(user.id);
   res.json({ connected: false, status: "not_connected" });
+});
+
+router.get("/settings/control-center", async (req, res): Promise<void> => {
+  const user = requireAuthenticatedUser(req, res);
+  if (!user) return;
+
+  const github = await getGitHubCredentialStatus(user.id);
+  const registry = createDefaultRufloToolRegistry();
+  const tools = registry.list();
+  const auditRecords = listRufloAuditRecords({ userId: user.id });
+  res.json(buildControlCenterSnapshot({
+    github,
+    tools,
+    auditRecords,
+    models: providerManager.getModels(),
+  }));
 });
 
 export default router;

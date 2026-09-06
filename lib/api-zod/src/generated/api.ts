@@ -1345,3 +1345,35 @@ export const GetRepositoryOverviewResponse = zod.object({
 })
 
 
+/**
+ * Returns sanitized, server-owned status for the existing Cosmic Agent and Ruflo boundaries. No credentials, filesystem paths, raw secrets, or write operations are returned.
+ * @summary Get the authenticated Control Center snapshot
+ */
+export const GetControlCenterResponse = zod.object({
+  "generatedAt": zod.string(),
+  "overallStatus": zod.enum(['operational', 'attention', 'restricted']),
+  "categories": zod.array(zod.object({
+  "id": zod.string(),
+  "label": zod.string(),
+  "modules": zod.array(zod.object({
+  "id": zod.string(),
+  "label": zod.string(),
+  "status": zod.string(),
+  "classification": zod.string(),
+  "reason": zod.string(),
+  "permissions": zod.array(zod.string()),
+  "activity": zod.array(zod.string()),
+  "configuration": zod.array(zod.string()),
+  "diagnostics": zod.array(zod.string()),
+  "counts": zod.record(zod.string(), zod.number())
+}))
+})),
+  "activity": zod.array(zod.object({
+  "label": zod.string(),
+  "detail": zod.string(),
+  "timestamp": zod.string(),
+  "tone": zod.enum(['neutral', 'positive', 'warning', 'danger'])
+}))
+})
+
+

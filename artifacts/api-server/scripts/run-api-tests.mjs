@@ -28,6 +28,7 @@ const builds = [
   ["src/ruflo/ruflo-dag.ts", "ruflo-dag.mjs", "esm"],
   ["src/ruflo/ruflo-cost-tracker.ts", "ruflo-cost-tracker.mjs", "esm"],
   ["src/ruflo/ruflo-provider-router.ts", "ruflo-provider-router.mjs", "esm"],
+  ["src/ruflo/ruflo-control-center.ts", "ruflo-control-center.mjs", "esm"],
   ["src/ruflo/ruflo-live-events.ts", "ruflo-live-events.mjs", "esm"],
   ["src/ruflo/ruflo-specialized-agents.ts", "ruflo-specialized-agents.mjs", "esm"],
   ["test/ruflo-swarm-entry.mjs", "ruflo-swarm.mjs", "esm"],

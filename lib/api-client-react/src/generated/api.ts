@@ -33,6 +33,7 @@ import type {
   CommitChangeProposalInput,
   CommitResult,
   CommitReview,
+  ControlCenterSnapshot,
   ExecuteChangeProposalInput,
   HealthStatus,
   ProposalActionInput,
@@ -159,13 +160,6 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
 
   return withQueryKey(query, queryOptions.queryKey);
 }
-
-
-
-
-
-
-
 export const getListAiModelsUrl = () => {
 
 
@@ -2208,3 +2202,74 @@ export const useGetRepositoryOverview = <TError = ErrorType<unknown>,
       return useMutation(getGetRepositoryOverviewMutationOptions(options));
     }
 
+export const getGetControlCenterUrl = () => {
+
+
+
+
+  return `/api/settings/control-center`
+}
+
+/**
+ * Returns sanitized, server-owned status for the existing Cosmic Agent and Ruflo boundaries. No credentials, filesystem paths, raw secrets, or write operations are returned.
+ * @summary Get the authenticated Control Center snapshot
+ */
+export const getControlCenter = async ( options?: Parameters<typeof customFetch>[1]): Promise<ControlCenterSnapshot> => {
+
+  return customFetch<ControlCenterSnapshot>(getGetControlCenterUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetControlCenterQueryKey = () => {
+    return [
+    `/api/settings/control-center`
+    ] as const;
+    }
+
+
+export const getGetControlCenterQueryOptions = <TData = Awaited<ReturnType<typeof getControlCenter>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getControlCenter>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetControlCenterQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getControlCenter>>> = ({ signal }) => getControlCenter({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getControlCenter>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetControlCenterQueryResult = NonNullable<Awaited<ReturnType<typeof getControlCenter>>>
+export type GetControlCenterQueryError = ErrorType<void>
+
+
+/**
+ * @summary Get the authenticated Control Center snapshot
+ */
+
+export function useGetControlCenter<TData = Awaited<ReturnType<typeof getControlCenter>>, TError = ErrorType<void>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getControlCenter>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetControlCenterQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}

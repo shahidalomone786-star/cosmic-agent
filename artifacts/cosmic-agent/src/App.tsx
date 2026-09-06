@@ -10,12 +10,13 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import { ChangeProposalReview } from '@/components/change-proposal-review';
 import { PreviewPanel } from '@/components/preview-panel';
+import { ControlCenter } from '@/components/control-center';
 import { acceptRufloLiveEvent, parseRufloSseBlock } from './ruflo-live-client';
 import {
   Aperture, Bot, Check, ChevronDown, CircleAlert, CircleCheck, Code2, Copy, Gauge, LockKeyhole, Menu, MoreHorizontal,
   FileCode2,
   Activity, Eye, GitBranch, Pencil, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Terminal, Trash2, Wrench, X, Square,
-  Github, KeyRound, LoaderCircle, LogIn, LogOut, Settings as SettingsIcon,
+  ArrowLeft, Github, KeyRound, LoaderCircle, LogIn, LogOut, Settings as SettingsIcon,
 } from 'lucide-react';
 import { Link, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
 
@@ -233,7 +234,7 @@ function ComposerModePicker({ mode, open, onToggle, onChange }: { mode: Composer
   </div>;
 }
 
-function GitHubSettings({ onClose, notify }: { onClose: () => void; notify: (message: string) => void }) {
+function GitHubSettings({ onClose, onBack, notify, embedded = false }: { onClose: () => void; onBack?: () => void; notify: (message: string) => void; embedded?: boolean }) {
   const [status, setStatus] = useState<GitHubStatus | null>(null);
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
@@ -249,7 +250,7 @@ function GitHubSettings({ onClose, notify }: { onClose: () => void; notify: (mes
   const validate = async () => { setBusy(true); setError(''); try { const next = await apiJson<GitHubStatus>('/api/settings/github/validate', { method: 'POST' }); setStatus(next); notify(next.status === 'connected' ? 'GitHub token is valid.' : `GitHub status: ${next.status.replace('_', ' ')}`); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not validate GitHub token.'); } finally { setBusy(false); } };
   const remove = async () => { setBusy(true); setError(''); try { setStatus(await apiJson<GitHubStatus>('/api/settings/github', { method: 'DELETE' })); notify('GitHub disconnected.'); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not remove GitHub token.'); } finally { setBusy(false); } };
   const label = status?.status === 'not_connected' || !status ? 'Not Connected' : status.status === 'rate_limited' ? 'Rate Limited' : status.status === 'invalid' ? 'Invalid' : status.status === 'unavailable' ? 'Unavailable' : 'Connected';
-  return <aside className="settings-panel"><div className="settings-head"><div><span className="repo-kicker"><SettingsIcon size={12} /> Settings</span><strong>Integrations</strong></div><button className="icon-button" onClick={onClose} aria-label="Close settings"><X size={17} /></button></div><div className="settings-content"><div className="integration-title"><Github size={22} /><div><strong>GitHub</strong><small>Repository access for private projects</small></div><span className={`integration-status ${status?.status ?? 'not_connected'}`}>{label}</span></div><form className="github-form" onSubmit={save}><label>GitHub Personal Access Token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="ghp_••••••••••••" autoComplete="off" required /></label><small className="settings-note"><KeyRound size={13} /> Encrypted on the server. It never appears in responses, logs, or agent context.</small><div className="settings-actions"><button className="settings-primary" disabled={busy || !token.trim()}>{busy ? <LoaderCircle className="spin" size={14} /> : null}Save</button>{status?.status !== 'not_connected' && <><button type="button" className="settings-button" onClick={() => void validate()} disabled={busy}>Validate</button><button type="button" className="settings-danger" onClick={() => void remove()} disabled={busy}>Remove</button></>}</div></form>{error && <div className="auth-error" role="alert">{error}</div>}</div></aside>;
+  return <aside className={`settings-panel ${embedded ? 'control-center-embedded-settings' : ''}`}><div className="settings-head"><div><span className="repo-kicker"><SettingsIcon size={12} /> {embedded ? 'Control Center / Integrations' : 'Settings'}</span><strong>Integrations</strong></div><div className="settings-head-actions">{onBack && <button className="icon-button" onClick={onBack} aria-label="Back to integrations overview"><ArrowLeft size={16} /></button>}<button className="icon-button" onClick={onClose} aria-label="Close settings"><X size={17} /></button></div></div><div className="settings-content"><div className="integration-title"><Github size={22} /><div><strong>GitHub</strong><small>Repository access for private projects</small></div><span className={`integration-status ${status?.status ?? 'not_connected'}`}>{label}</span></div><form className="github-form" onSubmit={save}><label>GitHub Personal Access Token<input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="ghp_••••••••••••" autoComplete="off" required /></label><small className="settings-note"><KeyRound size={13} /> Encrypted on the server. It never appears in responses, logs, or agent context.</small><div className="settings-actions"><button className="settings-primary" disabled={busy || !token.trim()}>{busy ? <LoaderCircle className="spin" size={14} /> : null}Save</button>{status?.status !== 'not_connected' && <><button type="button" className="settings-button" onClick={() => void validate()} disabled={busy}>Validate</button><button type="button" className="settings-danger" onClick={() => void remove()} disabled={busy}>Remove</button></>}</div></form>{error && <div className="auth-error" role="alert">{error}</div>}</div></aside>;
 }
 
 function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
@@ -607,7 +608,7 @@ function Home({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
     <RepositoryPanel open={repositoryOpen} repository={repository} onRepositoryChange={(next) => { setRepository(next); if (!next) setContextPaths([]); }} contextPaths={contextPaths} onAddContext={(path) => setContextPaths((current) => current.includes(path) ? current : [...current, path])} onRemoveContext={(path) => setContextPaths((current) => current.filter((item) => item !== path))} onClose={() => setRepositoryOpen(false)} />
      {resourceOpen && <button className="drawer-overlay resource-overlay" onClick={() => setResourceOpen(false)} aria-label="Close resource status" />}
      <ResourceStatusPanel open={resourceOpen} onClose={() => setResourceOpen(false)} />
-     {settingsOpen && <><button className="drawer-overlay settings-overlay" onClick={() => setSettingsOpen(false)} aria-label="Close settings" /><GitHubSettings onClose={() => setSettingsOpen(false)} notify={notify} /></>}
+      {settingsOpen && <><button className="drawer-overlay settings-overlay" onClick={() => setSettingsOpen(false)} aria-label="Close settings" /><ControlCenter onClose={() => setSettingsOpen(false)} notify={notify} integrationDetail={(onBack) => <GitHubSettings embedded onBack={onBack} onClose={() => setSettingsOpen(false)} notify={notify} />} /></>}
     {toast && <div className="toast-note" role="status">{toast}</div>}
   </div>;
 }

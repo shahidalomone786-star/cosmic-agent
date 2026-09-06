@@ -661,6 +661,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RepositoryOverview"
+  /settings/control-center:
+    get:
+      operationId: getControlCenter
+      tags: [settings]
+      summary: Get the authenticated Control Center snapshot
+      description: Returns sanitized, server-owned status for the existing Cosmic Agent and Ruflo boundaries. No credentials, filesystem paths, raw secrets, or write operations are returned.
+      responses:
+        "200":
+          description: Control Center snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlCenterSnapshot"
+        "401":
+          description: Authenticated user required
 components:
   schemas:
     HealthStatus:
@@ -1492,4 +1507,60 @@ components:
         - files
         - dependencies
         - architecture
+    ControlCenterSnapshot:
+      type: object
+      properties:
+        generatedAt: { type: string }
+        overallStatus: { type: string, enum: [operational, attention, restricted] }
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/ControlCenterCategory"
+        activity:
+          type: array
+          items:
+            $ref: "#/components/schemas/ControlCenterActivity"
+      required: [generatedAt, overallStatus, categories, activity]
+    ControlCenterCategory:
+      type: object
+      properties:
+        id: { type: string }
+        label: { type: string }
+        modules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ControlCenterModule"
+      required: [id, label, modules]
+    ControlCenterModule:
+      type: object
+      properties:
+        id: { type: string }
+        label: { type: string }
+        status: { type: string }
+        classification: { type: string }
+        reason: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+        activity:
+          type: array
+          items: { type: string }
+        configuration:
+          type: array
+          items: { type: string }
+        diagnostics:
+          type: array
+          items: { type: string }
+        counts:
+          type: object
+          additionalProperties: { type: number }
+      required: [id, label, status, classification, reason, permissions, activity, configuration, diagnostics, counts]
+    ControlCenterActivity:
+      type: object
+      properties:
+        label: { type: string }
+        detail: { type: string }
+        timestamp: { type: string }
+        tone: { type: string, enum: [neutral, positive, warning, danger] }
+      required: [label, detail, timestamp, tone]
 
