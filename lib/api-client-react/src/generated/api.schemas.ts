@@ -1168,6 +1168,36 @@ export interface ControlCenterSnapshot {
   activity: ControlCenterActivity[];
 }
 
+export interface SecretInput {
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  name: string;
+  /**
+     * @minLength 1
+     * @maxLength 10000
+     */
+  value: string;
+}
+
+export interface SecretValueInput {
+  /**
+     * @minLength 1
+     * @maxLength 10000
+     */
+  value: string;
+}
+
+export interface SecretMetadata {
+  id: string;
+  name: string;
+  maskedValue: string;
+  createdAt: string;
+  /** @nullable */
+  lastUsedAt: string | null;
+}
+
 export type RequestAgentTool200 = { [key: string]: unknown };
 
 export type SubmitWorkerReport200 = {

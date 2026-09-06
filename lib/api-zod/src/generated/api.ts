@@ -1377,3 +1377,79 @@ export const GetControlCenterResponse = zod.object({
 })
 
 
+/**
+ * @summary List sanitized secrets for the authenticated user
+ */
+export const ListSecretsResponseItem = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "maskedValue": zod.string(),
+  "createdAt": zod.string(),
+  "lastUsedAt": zod.string().nullable()
+})
+export const ListSecretsResponse = zod.array(ListSecretsResponseItem)
+
+
+/**
+ * @summary Create an encrypted secret
+ */
+export const createSecretBodyNameMax = 120;
+
+export const createSecretBodyValueMax = 10000;
+
+
+
+export const CreateSecretBody = zod.object({
+  "name": zod.string().min(1).max(createSecretBodyNameMax),
+  "value": zod.string().min(1).max(createSecretBodyValueMax)
+})
+
+export const CreateSecretResponse = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "maskedValue": zod.string(),
+  "createdAt": zod.string(),
+  "lastUsedAt": zod.string().nullable()
+})
+
+
+/**
+ * @summary Replace an encrypted secret value
+ */
+
+
+
+export const RotateSecretParams = zod.object({
+  "secretId": zod.coerce.string().min(1)
+})
+
+export const rotateSecretBodyValueMax = 10000;
+
+
+
+export const RotateSecretBody = zod.object({
+  "value": zod.string().min(1).max(rotateSecretBodyValueMax)
+})
+
+export const RotateSecretResponse = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "maskedValue": zod.string(),
+  "createdAt": zod.string(),
+  "lastUsedAt": zod.string().nullable()
+})
+
+
+/**
+ * @summary Delete an encrypted secret
+ */
+
+
+
+export const DeleteSecretParams = zod.object({
+  "secretId": zod.coerce.string().min(1)
+})
+
+export const DeleteSecretResponse = zod.void()
+
+

@@ -676,6 +676,89 @@ paths:
                 $ref: "#/components/schemas/ControlCenterSnapshot"
         "401":
           description: Authenticated user required
+  /settings/secrets:
+    get:
+      operationId: listSecrets
+      tags: [settings]
+      summary: List sanitized secrets for the authenticated user
+      responses:
+        "200":
+          description: Secret metadata without secret values
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecretMetadata"
+        "401":
+          description: Authenticated user required
+    post:
+      operationId: createSecret
+      tags: [settings]
+      summary: Create an encrypted secret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecretInput"
+      responses:
+        "201":
+          description: Created secret metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretMetadata"
+        "400":
+          description: Invalid secret input
+        "401":
+          description: Authenticated user required
+  /settings/secrets/{secretId}/rotate:
+    post:
+      operationId: rotateSecret
+      tags: [settings]
+      summary: Replace an encrypted secret value
+      parameters:
+        - name: secretId
+          in: path
+          required: true
+          schema: { type: string, minLength: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecretValueInput"
+      responses:
+        "200":
+          description: Rotated secret metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretMetadata"
+        "400":
+          description: Invalid secret input
+        "401":
+          description: Authenticated user required
+        "404":
+          description: Secret not found
+  /settings/secrets/{secretId}:
+    delete:
+      operationId: deleteSecret
+      tags: [settings]
+      summary: Delete an encrypted secret
+      parameters:
+        - name: secretId
+          in: path
+          required: true
+          schema: { type: string, minLength: 1 }
+      responses:
+        "204":
+          description: Secret deleted
+        "401":
+          description: Authenticated user required
+        "404":
+          description: Secret not found
 components:
   schemas:
     HealthStatus:
@@ -1563,4 +1646,24 @@ components:
         timestamp: { type: string }
         tone: { type: string, enum: [neutral, positive, warning, danger] }
       required: [label, detail, timestamp, tone]
+    SecretInput:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        value: { type: string, minLength: 1, maxLength: 10000 }
+      required: [name, value]
+    SecretValueInput:
+      type: object
+      properties:
+        value: { type: string, minLength: 1, maxLength: 10000 }
+      required: [value]
+    SecretMetadata:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        maskedValue: { type: string }
+        createdAt: { type: string }
+        lastUsedAt: { type: [string, "null"] }
+      required: [id, name, maskedValue, createdAt, lastUsedAt]
 

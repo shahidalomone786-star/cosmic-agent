@@ -57,6 +57,9 @@ import type {
   RufloGitCommitReview,
   RufloGitPushResult,
   RufloGitPushReview,
+  SecretInput,
+  SecretMetadata,
+  SecretValueInput,
   SubmitWorkerReport200,
   WorkerReport,
   WorkerToolRequest
@@ -122,7 +125,6 @@ export const getHealthCheckQueryKey = () => {
     ] as const;
     }
 
-
 export const getHealthCheckQueryOptions = <TData = Awaited<ReturnType<typeof healthCheck>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof healthCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -160,6 +162,13 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
 
   return withQueryKey(query, queryOptions.queryKey);
 }
+
+
+
+
+
+
+
 export const getListAiModelsUrl = () => {
 
 
@@ -2273,3 +2282,300 @@ export function useGetControlCenter<TData = Awaited<ReturnType<typeof getControl
 
   return withQueryKey(query, queryOptions.queryKey);
 }
+
+
+
+
+
+
+
+export const getListSecretsUrl = () => {
+
+
+
+
+  return `/api/settings/secrets`
+}
+
+/**
+ * @summary List sanitized secrets for the authenticated user
+ */
+export const listSecrets = async ( options?: Parameters<typeof customFetch>[1]): Promise<SecretMetadata[]> => {
+
+  return customFetch<SecretMetadata[]>(getListSecretsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListSecretsQueryKey = () => {
+    return [
+    `/api/settings/secrets`
+    ] as const;
+    }
+
+
+export const getListSecretsQueryOptions = <TData = Awaited<ReturnType<typeof listSecrets>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSecrets>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSecretsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSecrets>>> = ({ signal }) => listSecrets({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSecrets>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSecretsQueryResult = NonNullable<Awaited<ReturnType<typeof listSecrets>>>
+export type ListSecretsQueryError = ErrorType<void>
+
+
+/**
+ * @summary List sanitized secrets for the authenticated user
+ */
+
+export function useListSecrets<TData = Awaited<ReturnType<typeof listSecrets>>, TError = ErrorType<void>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSecrets>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSecretsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCreateSecretUrl = () => {
+
+
+
+
+  return `/api/settings/secrets`
+}
+
+/**
+ * @summary Create an encrypted secret
+ */
+export const createSecret = async (secretInput: SecretInput, options?: Parameters<typeof customFetch>[1]): Promise<SecretMetadata> => {
+
+  return customFetch<SecretMetadata>(getCreateSecretUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(secretInput)
+  }
+);}
+
+
+
+
+
+export const getCreateSecretMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSecret>>, TError,{data: BodyType<SecretInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createSecret>>, TError,{data: BodyType<SecretInput>}, TContext> => {
+
+const mutationKey = ['createSecret'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSecret>>, {data: BodyType<SecretInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createSecret(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateSecretMutationResult = NonNullable<Awaited<ReturnType<typeof createSecret>>>
+    export type CreateSecretMutationBody = BodyType<SecretInput>
+    export type CreateSecretMutationError = ErrorType<void>
+
+    /**
+ * @summary Create an encrypted secret
+ */
+export const useCreateSecret = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSecret>>, TError,{data: BodyType<SecretInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createSecret>>,
+        TError,
+        {data: BodyType<SecretInput>},
+        TContext
+      > => {
+      return useMutation(getCreateSecretMutationOptions(options));
+    }
+
+export const getRotateSecretUrl = (secretId: string,) => {
+
+
+
+
+  return `/api/settings/secrets/${secretId}/rotate`
+}
+
+/**
+ * @summary Replace an encrypted secret value
+ */
+export const rotateSecret = async (secretId: string,
+    secretValueInput: SecretValueInput, options?: Parameters<typeof customFetch>[1]): Promise<SecretMetadata> => {
+
+  return customFetch<SecretMetadata>(getRotateSecretUrl(secretId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(secretValueInput)
+  }
+);}
+
+
+
+
+
+export const getRotateSecretMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rotateSecret>>, TError,{secretId: string;data: BodyType<SecretValueInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof rotateSecret>>, TError,{secretId: string;data: BodyType<SecretValueInput>}, TContext> => {
+
+const mutationKey = ['rotateSecret'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rotateSecret>>, {secretId: string;data: BodyType<SecretValueInput>}> = (props) => {
+          const {secretId,data} = props ?? {};
+
+          return  rotateSecret(secretId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RotateSecretMutationResult = NonNullable<Awaited<ReturnType<typeof rotateSecret>>>
+    export type RotateSecretMutationBody = BodyType<SecretValueInput>
+    export type RotateSecretMutationError = ErrorType<void>
+
+    /**
+ * @summary Replace an encrypted secret value
+ */
+export const useRotateSecret = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rotateSecret>>, TError,{secretId: string;data: BodyType<SecretValueInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof rotateSecret>>,
+        TError,
+        {secretId: string;data: BodyType<SecretValueInput>},
+        TContext
+      > => {
+      return useMutation(getRotateSecretMutationOptions(options));
+    }
+
+export const getDeleteSecretUrl = (secretId: string,) => {
+
+
+
+
+  return `/api/settings/secrets/${secretId}`
+}
+
+/**
+ * @summary Delete an encrypted secret
+ */
+export const deleteSecret = async (secretId: string, options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getDeleteSecretUrl(secretId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteSecretMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSecret>>, TError,{secretId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteSecret>>, TError,{secretId: string}, TContext> => {
+
+const mutationKey = ['deleteSecret'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteSecret>>, {secretId: string}> = (props) => {
+          const {secretId} = props ?? {};
+
+          return  deleteSecret(secretId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteSecretMutationResult = NonNullable<Awaited<ReturnType<typeof deleteSecret>>>
+
+    export type DeleteSecretMutationError = ErrorType<void>
+
+    /**
+ * @summary Delete an encrypted secret
+ */
+export const useDeleteSecret = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSecret>>, TError,{secretId: string}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteSecret>>,
+        TError,
+        {secretId: string},
+        TContext
+      > => {
+       return useMutation(getDeleteSecretMutationOptions(options));
+     }

@@ -24,12 +24,14 @@ type AuditSnapshotInput = {
 
 export function buildControlCenterSnapshot({
   github,
+  secretCount,
   tools,
   auditRecords,
   models,
   now = () => new Date(),
 }: {
   github: GitHubSnapshotInput;
+  secretCount: number;
   tools: ToolSnapshotInput[];
   auditRecords: AuditSnapshotInput[];
   models: ModelSnapshotInput[];
@@ -65,7 +67,7 @@ export function buildControlCenterSnapshot({
         label: "DEVELOPMENT",
         modules: [
           moduleSnapshot("skills", "Skills", "PARTIAL", "Canonical Ruflo capability registry is available; no self-granting or settings mutation is exposed.", ["workspace:read"], ["Registry is server-owned.", `${toolCounts.enabled} enabled bounded tool(s) visible.`], ["Uses the unified Ruflo registry.", "Disabled and metadata-only definitions remain non-executable."], ["Normal Agent cannot invoke Ruflo-only tools."], toolCounts),
-          moduleSnapshot("files", "Files", "PARTIAL", "Workspace-bound read/write APIs exist, but this Control Center does not expose file mutations.", ["workspace:read"], [], ["Workspace operations remain project-scoped.", "Path traversal and symlink boundary checks remain server-owned."], ["Race-hardening gaps remain documented; no new file authority is added."], {}),
+          moduleSnapshot("files", "Files", "NATIVE — VERIFIED", "Authenticated local workspace browsing and text-file editing are available through the bounded workspace API.", ["workspace:read"], [], ["Workspace operations remain project-scoped.", "Path traversal, symlink, protected-path, and file-size checks remain server-owned."], ["Binary, credential-like, and protected authentication paths remain non-editable."], { operations: ["list", "read", "create", "write"] }),
           moduleSnapshot("console", "Console", "DISABLED — INTENTIONALLY RESTRICTED", "No safe general sandbox with resource, network, process-tree, and filesystem isolation exists.", [], [], ["No console controls are available."], ["Bounded validation/preview subprocesses are not treated as a safe console."], {}),
           moduleSnapshot("workflows", "Workflows", "PARTIAL", "Existing bounded Ruflo jobs and DAG runtime are available; a full Settings workflow projection is not claimed.", ["workspace:read"], recentActivity.slice(0, 3).map((item) => item.detail), ["Reuses the existing jobs/DAG/session runtime."], ["No start, stop, retry, or mutation control is exposed here."], {}),
         ],
@@ -92,7 +94,7 @@ export function buildControlCenterSnapshot({
         id: "security",
         label: "SECURITY",
         modules: [
-          moduleSnapshot("secrets", "Secrets", "PARTIAL", "The GitHub credential path is encrypted and server-held; a general secret vault is not implemented.", [], githubActivity.map((item) => item.detail), ["No credential material is returned.", "No add, rotate, or delete action is exposed here."], ["Diagnostics are sanitized by construction."], {}),
+          moduleSnapshot("secrets", "Secrets", "NATIVE — VERIFIED", "Encrypted, user-owned secret vault with masked metadata and authenticated add, rotate, and delete actions.", [], recentActivity.filter((item) => item.detail.startsWith("control-center.secret.")).map((item) => item.detail), [`${secretCount} encrypted secret(s) stored.`], ["Values are never returned, logged, or exposed to agent context."], { secrets: secretCount }),
           moduleSnapshot("permissions", "Permissions", "PARTIAL", "Authentication, ownership checks, approval gates, and tool permissions remain server-owned; no parallel permission editor exists.", ["workspace:read"], recentActivity.slice(0, 3).map((item) => item.detail), ["Permissions are derived from the canonical registry and request owner."], ["This panel cannot grant authority."], { registeredTools: toolCounts.registered }),
           moduleSnapshot("audit", "Audit", "PARTIAL", "Ruflo tool audit records are available for this user when recorded; the audit store is bounded in memory.", ["workspace:read"], recentActivity.slice(0, 8).map((item) => item.detail), ["Uses the existing Ruflo audit log.", `${auditRecords.length} current-user record(s) available.`], ["No fabricated score or audit result is shown."], { records: auditRecords.length }),
           moduleSnapshot("security-center", "Security Center", "DISABLED — INTENTIONALLY RESTRICTED", "No live scan/security-data API exists that would justify a score or security claim in this panel.", [], [], ["Static audit documents remain documentation, not live telemetry."], ["No score, pass, or scan result is fabricated."], {}),

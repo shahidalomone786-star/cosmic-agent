@@ -4,6 +4,7 @@ import { buildControlCenterSnapshot } from "../test-dist/ruflo-control-center.mj
 
 const snapshot = (overrides = {}) => buildControlCenterSnapshot({
   github: { status: "not_connected", lastValidatedAt: null },
+  secretCount: 0,
   tools: [
     { enabled: true, availability: "available" },
     { enabled: false, availability: "disabled" },
