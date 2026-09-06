@@ -321,6 +321,10 @@ export async function executeAgentTool(
     }
     session.updatedAt = now();
   };
+  if (isNormalAgentRufloAuthorityName(name)) {
+    finishTrace("denied", "permission_denied");
+    throw new AgentToolError("permission_denied", "Normal Agent cannot access Ruflo orchestration, swarm, planner, spawning, or authority tools.");
+  }
   if (session.toolTraces.filter((item) => item.status === "requested" || item.status === "running" || item.status === "completed" || item.status === "failed" || item.status === "timeout").length > MAX_TOOL_CALLS) {
     finishTrace("denied", "bounded");
     throw new AgentToolError("bounded", `The task tool-call limit of ${MAX_TOOL_CALLS} has been reached.`);
@@ -866,6 +870,10 @@ export function getOffloadedResult(sessionId: string, resultId: string): { previ
 
 export function getAgentToolDefinitions() {
   return toolDefinitions;
+}
+
+export function isNormalAgentRufloAuthorityName(name: string): boolean {
+  return /^(ruflo|swarm|planner|orchestration|agent_spawn|agent_execute|federation|hive_mind|mcp:)/i.test(name.trim());
 }
 
 export function recordServerToolTrace(

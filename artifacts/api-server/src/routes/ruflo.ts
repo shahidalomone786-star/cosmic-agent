@@ -81,6 +81,10 @@ import {
   type RufloSwarmTask,
 } from "../ruflo/ruflo-swarm";
 import { rufloSwarmRepository } from "../ruflo/ruflo-swarm-store";
+import {
+  buildPhase12Plan,
+  Phase12Error,
+} from "../ruflo/ruflo-phase12";
 
 type RufloPublicActivity = {
   id: string;
@@ -888,6 +892,46 @@ router.post("/ruflo/sessions", async (req, res) => {
     res.status(201).json(publicSession(stored.id, entry));
   } catch (error) {
     res.status(400).json({ error: publicError(error), code: "ruflo_start_failed" });
+  }
+});
+
+router.get("/ruflo/sessions/:sessionId/phase12/plan", async (req, res) => {
+  const userId = req.authUser!.id;
+  const sessionId = stringBody(req.params.sessionId);
+  const entry = runtimeSessions.get(sessionId);
+  if (!entry || entry.ownerId !== userId) {
+    res.status(404).json({ error: "Ruflo session was not found.", code: "session_not_found" });
+    return;
+  }
+  if (!entry.session) {
+    res.status(409).json({
+      error: "The bounded Ruflo inspection has not completed, so a Phase 12 plan cannot be created yet.",
+      code: "session_not_ready",
+    });
+    return;
+  }
+  try {
+    const plan = buildPhase12Plan({
+      session: entry.session,
+      userId,
+      projectId: entry.projectId,
+      repository: entry.repository,
+      memoryFacts: entry.memoryFactCount,
+      registry: rufloToolRegistry,
+    });
+    await rufloSessionStore.createActivity(userId, {
+      sessionId,
+      kind: "phase12_plan_created",
+      message: `Phase 12 plan ${plan.taskId} created with ${plan.nodes.length} bounded nodes.`,
+    });
+    res.json(plan);
+  } catch (error) {
+    if (error instanceof Phase12Error) {
+      res.status(400).json({ error: error.message, code: error.code });
+      return;
+    }
+    logger.error({ err: error, sessionId, userId }, "Unable to create Phase 12 plan");
+    res.status(500).json({ error: "Unable to create the Phase 12 plan.", code: "phase12_plan_failed" });
   }
 });
 

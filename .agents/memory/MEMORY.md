@@ -16,3 +16,4 @@
 - [Phase 9 import boundaries](phase9-import-boundaries.md) — Adapt Ruflo only through existing server-owned controls; keep authority-heavy runtimes as disabled metadata.
 - [Phase 10 executable inventory](phase10-executable-inventory.md) — Count only enabled, bounded, audited adapters; preserve unsupported source capabilities as disabled provenance.
 - [Phase 11 native boundary](phase11-native-boundary.md) — Keep registry imports lightweight; inject repository/workspace readers only at runtime.
+- [Phase 12 orchestration boundary](phase12-orchestration-boundary.md) — Extend the existing planner, DAG, registry, memory, activity, and approval systems; do not create parallel authority infrastructure.
