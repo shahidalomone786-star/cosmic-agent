@@ -65,7 +65,7 @@ function errorReport(detail: BrowserErrorEventDetail): BrowserErrorReport {
 }
 
 export function reportBrowserError(error: unknown, details?: BrowserErrorDetails): void {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || !import.meta.env.DEV) return;
   window.dispatchEvent(new CustomEvent<BrowserErrorEventDetail>(BROWSER_ERROR_EVENT, {
     detail: { error, details },
   }));
@@ -155,7 +155,7 @@ export function BrowserErrorOverlay() {
     };
   }, []);
 
-  if (!reports.length) return null;
+  if (!import.meta.env.DEV || !reports.length) return null;
   return (
     <aside
       role="alert"

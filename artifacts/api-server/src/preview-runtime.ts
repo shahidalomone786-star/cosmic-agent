@@ -26,6 +26,18 @@ const MAX_OUTPUT = 12_000;
 const previewCommand = ["exec", "vite", "--host", "127.0.0.1"];
 
 function now() { return new Date().toISOString(); }
+function isWithinDirectory(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+async function readPreviewFile(root: string, relative: string): Promise<Buffer> {
+  const canonicalRoot = await fs.realpath(root);
+  const candidate = path.resolve(root, relative);
+  if (!isWithinDirectory(canonicalRoot, candidate)) throw new Error("Unsafe preview path.");
+  const canonicalCandidate = await fs.realpath(candidate);
+  if (!isWithinDirectory(canonicalRoot, canonicalCandidate)) throw new Error("Unsafe preview path.");
+  return fs.readFile(canonicalCandidate);
+}
 function publicStatus(item: PreviewProcess): PreviewStatus {
   const { process: _process, port: _port, ...status } = item;
   return status;
@@ -191,10 +203,8 @@ export async function proxyPreview(req: Request, res: Response, proposalId: stri
     const requestPath = req.originalUrl.replace(`/api/preview/${encodeURIComponent(proposalId)}`, "").split("?")[0] || "/";
     const relative = requestPath === "/" ? item.entryFile ?? "index.html" : requestPath.replace(/^\/+/, "");
     try {
-      const safe = path.resolve(item.workspaceRoot, relative);
-      if (!safe.startsWith(path.resolve(item.workspaceRoot) + path.sep)) throw new Error("Unsafe preview path.");
-      const content = await fs.readFile(safe);
-      const type = safe.endsWith(".html") ? "text/html; charset=utf-8" : safe.endsWith(".css") ? "text/css; charset=utf-8" : safe.endsWith(".js") ? "text/javascript; charset=utf-8" : safe.endsWith(".json") ? "application/json; charset=utf-8" : safe.endsWith(".svg") ? "image/svg+xml" : "application/octet-stream";
+      const content = await readPreviewFile(item.workspaceRoot, relative);
+      const type = relative.endsWith(".html") ? "text/html; charset=utf-8" : relative.endsWith(".css") ? "text/css; charset=utf-8" : relative.endsWith(".js") ? "text/javascript; charset=utf-8" : relative.endsWith(".json") ? "application/json; charset=utf-8" : relative.endsWith(".svg") ? "image/svg+xml" : "application/octet-stream";
       res.setHeader("Cache-Control", "no-store");
       res.type(type).send(content);
     } catch {

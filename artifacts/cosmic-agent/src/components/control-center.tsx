@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useGetControlCenter, getGetControlCenterQueryKey, type ControlCenterCategory, type ControlCenterModule, type ControlCenterSnapshot } from '@workspace/api-client-react';
 import {
   Activity,
@@ -78,6 +78,13 @@ export function ControlCenter({
   const { data, isLoading, isError, refetch, isFetching } = useGetControlCenter({
     query: { queryKey: getGetControlCenterQueryKey(), refetchInterval: 15_000 },
   });
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
 
   const moduleIndex = useMemo(() => {
     const index = new Map<string, ControlCenterModule>();
@@ -102,7 +109,7 @@ export function ControlCenter({
     if (target && !isDisabled(target)) setView(next);
   };
 
-  return <aside className="control-center" aria-label="Cosmic Agent Control Center">
+  return <aside className="control-center" role="dialog" aria-modal="true" aria-label="Cosmic Agent Control Center">
     <div className="control-center-head">
       <div className="control-center-title">
         <div className="control-center-mark"><ServerCog size={18} /></div>

@@ -101,8 +101,12 @@ Verified coverage:
 Observed on 2026-09-06:
 
 - Phase 12.5 focused suite: **PASS — 4/4 tests**.
-- Full API regression suite: **PASS — 171/171 tests**, including Phase 8–12
-  suites and workspace security checks.
+- Authenticated Control Center browser smoke: **PASS** at a 390px viewport,
+  including unauthenticated login rendering, all five category labels, disabled
+  module reason text, modal backdrop/layering, body scroll lock, and close
+  restoration.
+- Full API regression suite: **PASS — 171/171 tests**, including the complete
+  generated-bundle runner and Phase 8–12.5 coverage.
 - Workspace typecheck: **PASS** (`pnpm run typecheck`).
 - API build: **PASS**.
 - Cosmic Agent frontend build: **PASS**; Vite emitted an existing sourcemap
@@ -112,23 +116,27 @@ Observed on 2026-09-06:
   returns HTTP 401 without a session**.
 - Clean managed restart: **PASS**; Vite and API server both reported ready and
   the server listened on port 8080.
-- Dependency audit: **FINDINGS — 0 critical, 7 high, 2 moderate, 2 low**.
-  High findings include `brace-expansion@5.0.8` and `fast-uri@3.1.4`.
-- SAST: **FINDINGS — 12 high path-construction findings** in existing preview
-  and workspace runtime code. Existing path-confinement tests pass, but the
-  scanner findings are not marked resolved by Phase 12.5.
+- Dependency audit: **FINDINGS — current scan 0 critical, 0 high, 1 moderate,
+  2 low**. The prior high findings are covered by the workspace overrides and
+  lockfile pins. The current remaining findings are `qs@6.15.3` and
+  `esbuild@0.27.3`; they are recorded as dependency follow-up, not silently
+  treated as resolved.
+- SAST: **12 high path-construction findings individually documented** in
+  `RUFLO_PHASE12_5_1_SAST_DISPOSITION.md`. The preview finding is covered by
+  lexical plus canonical containment checks; the workspace findings are covered
+  by normalized paths and operation-specific canonical boundary checks.
 - HoundDog: **PASS — 0 findings**.
-- Unauthenticated browser preview correctly stops at the existing account
-  boundary; no authenticated browser session was available for a screenshot of
-  the private Control Center.
+- Authenticated browser smoke now verifies the private Control Center without
+  exposing credentials or leaving a disposable session behind in the browser
+  profile.
 
 ## Remaining gaps
 
 Any item not backed by a real existing capability remains disabled or partial.
 The Control Center does not imply that a capability is executable merely
 because it is listed in metadata. Dependency and SAST scan findings remain
-separate follow-up security work; they do not become a fabricated Security
-Center score.
+separate, evidenced security records; they do not become a fabricated Security
+Center score. Phase 12.5.1 does not change disabled modules.
 
 ## Phase 13 candidates
 

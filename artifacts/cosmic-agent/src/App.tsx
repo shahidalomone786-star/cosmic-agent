@@ -161,6 +161,13 @@ function inlineMarkdown(text: string) {
   return pieces.map((part, i) => part.startsWith('`') ? <code key={i}>{part.slice(1, -1)}</code> : part.startsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : part);
 }
 
+class ApiHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
 async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
   const method = options?.method ?? 'GET';
   const requestBody = typeof options?.body === 'string' ? options.body : options?.body === undefined ? undefined : String(options.body);
@@ -179,20 +186,21 @@ async function apiJson<T>(url: string, options?: RequestInit): Promise<T> {
     body = null;
   }
   if (!response.ok) {
-    const error = new Error(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : responseBody || 'Request failed.');
-    error.name = 'HttpError';
-    reportBrowserError(error, {
-      source: 'apiJson HTTP response',
-      http: {
-        method,
-        url,
-        requestBody,
-        status: response.status,
-        statusText: response.statusText,
-        responseHeaders: [...response.headers.entries()].map(([key, value]) => `${key}: ${value}`).join('\n'),
-        responseBody,
-      },
-    });
+    const error = new ApiHttpError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : responseBody || 'Request failed.', response.status);
+    if (!(url === '/api/auth/me' && response.status === 401)) {
+      reportBrowserError(error, {
+        source: 'apiJson HTTP response',
+        http: {
+          method,
+          url,
+          requestBody,
+          status: response.status,
+          statusText: response.statusText,
+          responseHeaders: [...response.headers.entries()].map(([key, value]) => `${key}: ${value}`).join('\n'),
+          responseBody,
+        },
+      });
+    }
     throw error;
   }
   return body as T;
@@ -884,9 +892,26 @@ function Router({ user, onLogout }: { user: SessionUser; onLogout: () => void })
 function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checking, setChecking] = useState(true);
-  useEffect(() => { void apiJson<{ user: SessionUser }>('/api/auth/me').then((result) => setUser(result.user)).catch(() => setUser(null)).finally(() => setChecking(false)); }, []);
+  const [authCheckError, setAuthCheckError] = useState('');
+  const checkAuthentication = () => {
+    setChecking(true);
+    setAuthCheckError('');
+    void apiJson<{ user: SessionUser }>('/api/auth/me')
+      .then((result) => setUser(result.user))
+      .catch((cause) => {
+        if (cause instanceof ApiHttpError && cause.status === 401) {
+          setUser(null);
+          return;
+        }
+        setUser(null);
+        setAuthCheckError('We could not verify your session. Check your connection and try again.');
+      })
+      .finally(() => setChecking(false));
+  };
+  useEffect(() => { checkAuthentication(); }, []);
   const logout = () => { setUser(null); queryClient.clear(); };
   if (checking) return <main className="auth-shell"><LoaderCircle className="spin" size={22} /></main>;
+  if (authCheckError) return <main className="auth-shell"><section className="auth-card"><div className="auth-brand"><div className="brand-mark"><Aperture size={17} /></div><span>Cosmic Agent</span></div><div className="auth-heading"><span className="repo-kicker"><CircleAlert size={12} /> Session check</span><h1>We hit a connection problem</h1><p>{authCheckError}</p></div><button className="auth-submit" onClick={checkAuthentication}><RefreshCw size={15} /> Try again</button></section></main>;
   return <QueryClientProvider client={queryClient}><TooltipProvider>{user ? <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router user={user} onLogout={logout} /></WouterRouter> : <AuthScreen onAuthenticated={setUser} />}<Toaster /></TooltipProvider></QueryClientProvider>;
 }
 export default App;
