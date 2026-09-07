@@ -3,15 +3,19 @@ import type { RepositoryEntry, RepositoryFile, RepositoryRef } from '@workspace/
 import {
   Aperture,
   ArrowLeft,
+  Braces,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   CircleAlert,
   CircleOff,
   Code2,
+  File,
   FileCode2,
+  FileJson,
   FilePlus,
   FileText,
+  FileType2,
   FolderOpen,
   FolderPlus,
   Github,
@@ -20,11 +24,13 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Save,
   ShieldCheck,
   Trash2,
   X,
 } from 'lucide-react';
+import FileCodeEditor from '../components/file-code-editor';
 import { Link } from 'wouter';
 
 type Source = 'workspace' | 'github';
@@ -72,9 +78,30 @@ function toGitHubEntry(entry: RepositoryEntry): ExplorerEntry {
   return { path: entry.path, name: entry.name || fileName(entry.path), type: entry.type, size: entry.size, language: entry.language };
 }
 
+function fileKind(path: string) {
+  const extension = path.toLowerCase().split('.').pop() ?? '';
+  if (extension === 'ts' || extension === 'tsx') return 'typescript';
+  if (extension === 'js' || extension === 'jsx' || extension === 'mjs' || extension === 'cjs') return 'javascript';
+  if (extension === 'json') return 'json';
+  if (extension === 'md' || extension === 'markdown' || extension === 'mdx') return 'markdown';
+  if (extension === 'yaml' || extension === 'yml') return 'yaml';
+  if (extension === 'css' || extension === 'scss' || extension === 'less') return 'css';
+  if (extension === 'html' || extension === 'htm' || extension === 'svg') return 'html';
+  return 'generic';
+}
+
 function entryIcon(entry: ExplorerEntry, open = false) {
-  if (entry.type === 'directory') return open ? <FolderOpen size={15} /> : <FolderOpen size={15} />;
-  return <FileCode2 size={15} />;
+  if (entry.type === 'directory') return <FolderOpen size={15} />;
+  const kind = fileKind(entry.path);
+  return <FileIconForKind kind={kind} />;
+}
+
+function FileIconForKind({ kind }: { kind: string }) {
+  if (kind === 'json') return <FileJson size={15} />;
+  if (kind === 'typescript' || kind === 'javascript') return <FileCode2 size={15} />;
+  if (kind === 'markdown' || kind === 'yaml') return <FileType2 size={15} />;
+  if (kind === 'css' || kind === 'html') return <Braces size={15} />;
+  return <File size={15} />;
 }
 
 export default function FileExplorerPage() {
@@ -96,6 +123,8 @@ export default function FileExplorerPage() {
   const [dialogValue, setDialogValue] = useState('');
   const [dialogBusy, setDialogBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [filterQuery, setFilterQuery] = useState('');
+  const [cursorPosition, setCursorPosition] = useState({ line: 1, column: 1 });
 
   const entries = source === 'workspace' ? workspaceEntries : githubEntries;
   const githubAvailable = githubStatus?.connected === true;
@@ -270,10 +299,17 @@ export default function FileExplorerPage() {
     setDialog(kind);
   };
 
-  const renderTree = (path: string, depth = 0): ReactNode[] => {
-    const branch = entries[path] ?? [];
+  const normalizedFilter = filterQuery.trim().toLowerCase();
+  const hasTreeMatch = (entry: ExplorerEntry): boolean => {
+    if (!normalizedFilter) return true;
+    if (entry.name.toLowerCase().includes(normalizedFilter)) return true;
+    return entry.type === 'directory' && (entries[entry.path] ?? []).some(hasTreeMatch);
+  };
+
+  const renderTree = (path: string, depth = 0, rootGroup?: ExplorerEntry['type']): ReactNode[] => {
+    const branch = (entries[path] ?? []).filter((entry) => (!rootGroup || path !== '' || entry.type === rootGroup) && hasTreeMatch(entry));
     return branch.flatMap((entry) => {
-      const open = expanded.includes(entry.path);
+      const open = expanded.includes(entry.path) || Boolean(normalizedFilter && entry.type === 'directory' && hasTreeMatch(entry));
       const row = (
         <button
           type="button"
@@ -285,7 +321,7 @@ export default function FileExplorerPage() {
           data-testid={`file-explorer-entry-${entry.path || 'root'}`}
         >
           {entry.type === 'directory' ? (open ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : <span className="file-tree-spacer" />}
-          <span className={`file-tree-icon ${entry.type}`}>{entryIcon(entry, open)}</span>
+          <span className={`file-tree-icon ${entry.type} ${fileKind(entry.path)}`}>{entryIcon(entry, open)}</span>
           <span className="file-tree-name">{entry.name}</span>
           {entry.type === 'file' && entry.size !== undefined && <small>{formatBytes(entry.size)}</small>}
         </button>
@@ -295,6 +331,11 @@ export default function FileExplorerPage() {
   };
 
   const breadcrumbs = currentPath ? currentPath.split('/') : [];
+  const rootEntries = entries[''] ?? [];
+  const folderCount = rootEntries.filter((entry) => entry.type === 'directory').length;
+  const fileCount = rootEntries.filter((entry) => entry.type === 'file').length;
+  const hasFilteredEntries = rootEntries.some(hasTreeMatch);
+  const editorFileKind = selectedFile ? fileKind(selectedFile.path) : 'generic';
 
   return (
     <main className="file-explorer-page" data-testid="page-file-explorer">
@@ -323,13 +364,23 @@ export default function FileExplorerPage() {
             <button type="button" role="tab" aria-selected={source === 'workspace'} className={source === 'workspace' ? 'active' : ''} onClick={() => switchSource('workspace')} data-testid="tab-file-source-workspace"><HardDrive size={14} /><span>Workspace</span><small>editable</small></button>
             <button type="button" role="tab" aria-selected={source === 'github'} className={source === 'github' ? 'active' : ''} onClick={() => switchSource('github')} disabled={!githubAvailable} data-testid="tab-file-source-github"><Github size={14} /><span>GitHub</span><small>{githubAvailable ? 'read-only' : 'not connected'}</small></button>
           </div>
-          <div className="file-tree-context">
+           <label className="file-explorer-search">
+             <Search size={14} />
+             <input value={filterQuery} onChange={(event) => setFilterQuery(event.target.value)} placeholder="Search files and code" aria-label="Search files and code" />
+             {filterQuery && <button type="button" onClick={() => setFilterQuery('')} aria-label="Clear file search"><X size={13} /></button>}
+           </label>
+           <div className="file-tree-context">
             <div className="file-tree-context-head"><span className={`source-dot ${source}`} /> <strong>{source === 'workspace' ? 'Local workspace' : repository ? `${repository.owner}/${repository.name}` : 'GitHub repository'}</strong>{source === 'github' && <span className="read-only-badge">READ ONLY</span>}</div>
             {source === 'github' && !repository && <div className="file-explorer-callout"><CircleOff size={15} /><span>Connect a repository in the workspace Repository panel before browsing GitHub files.</span></div>}
             {source === 'github' && repository && <div className="file-explorer-readonly-note"><ShieldCheck size={13} /> Read-only — GitHub write is not supported here.</div>}
           </div>
-          <nav className="file-tree" aria-label={`${source === 'workspace' ? 'Workspace' : 'GitHub'} file tree`}>
-            {loading && !entries[''] ? <div className="file-tree-loading"><span /><span /><span /><span /></div> : entries['']?.length ? renderTree('') : <div className="file-tree-empty"><FileText size={20} /><strong>{source === 'workspace' ? 'Workspace is empty' : 'No readable files'}</strong><span>{source === 'workspace' ? 'Create a file or folder to start shaping this workspace.' : 'The connected repository returned no readable files.'}</span></div>}
+           <nav className="file-tree" aria-label={`${source === 'workspace' ? 'Workspace' : 'GitHub'} file tree`}>
+             {loading && !entries[''] ? <div className="file-tree-loading"><span /><span /><span /><span /></div> : entries['']?.length && hasFilteredEntries ? <>
+               {folderCount > 0 && <div className="file-tree-section-label"><span>FOLDERS</span><small>{folderCount}</small></div>}
+               {folderCount > 0 && renderTree('', 0, 'directory')}
+               {fileCount > 0 && <div className="file-tree-section-label"><span>FILES</span><small>{fileCount}</small></div>}
+               {fileCount > 0 && renderTree('', 0, 'file')}
+             </> : <div className="file-tree-empty"><FileText size={20} />{filterQuery ? <><strong>No matching files</strong><span>Try another name or clear the search filter.</span></> : <><strong>{source === 'workspace' ? 'Workspace is empty' : 'No readable files'}</strong><span>{source === 'workspace' ? 'Create a file or folder to start shaping this workspace.' : 'The connected repository returned no readable files.'}</span></>}</div>}
           </nav>
           {source === 'workspace' && <div className="file-tree-actions">
             <button type="button" onClick={() => openDialog('new-file')} data-testid="button-new-workspace-file"><FilePlus size={14} /> New file</button>
@@ -352,17 +403,16 @@ export default function FileExplorerPage() {
           </div>
           {error && <div className="file-explorer-error" role="alert"><CircleAlert size={15} /><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss error"><X size={14} /></button></div>}
           {notice && <div className="file-explorer-notice" role="status"><CheckCircle2 size={15} /><span>{notice}</span><button type="button" onClick={() => setNotice('')} aria-label="Dismiss success message"><X size={14} /></button></div>}
-          {fileLoading ? <div className="file-editor-loading"><LoaderCircle className="spin" size={20} /><strong>Opening file</strong><span>Reading through the authorized file boundary…</span></div> : selectedFile ? <form className="file-editor-card" onSubmit={saveFile}>
-            <div className="file-editor-card-head">
-              <div className="file-editor-file-title"><span className={`file-editor-file-icon ${source}`}><FileCode2 size={16} /></span><div><strong>{selectedFile.path}</strong><small>{source === 'github' ? 'GitHub source · read-only' : `${formatBytes(selectedFile.size)} · local workspace`}</small></div></div>
-              <span className={isDirty ? 'editor-dirty-status' : 'editor-clean-status'}>{isDirty ? 'Unsaved changes' : 'All changes saved'}</span>
+           {fileLoading ? <div className="file-editor-loading"><LoaderCircle className="spin" size={20} /><strong>Opening file</strong><span>Reading through the authorized file boundary…</span></div> : selectedFile ? <form className="file-editor-card" onSubmit={saveFile}>
+             <div className="file-editor-tabbar">
+               <div className="file-editor-tab active"><span className={`file-editor-file-icon ${editorFileKind}`}><FileIconForKind kind={editorFileKind} /></span><strong>{fileName(selectedFile.path)}</strong><span className={isDirty ? 'editor-dirty-dot' : 'editor-clean-dot'} /></div>
+               <button type="button" className="file-editor-tab-close" onClick={() => { setSelectedPath(''); setSelectedFile(null); setDraft(''); }} aria-label="Close selected file"><X size={14} /></button>
             </div>
             {'truncated' in selectedFile && selectedFile.truncated && <div className="file-editor-warning"><CircleAlert size={14} /> This GitHub file is safely truncated for viewing.</div>}
             <div className="file-editor-input-wrap">
-              <div className="file-line-numbers" aria-hidden="true">{draft.split('\n').map((_, index) => <span key={index}>{index + 1}</span>)}</div>
-              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} readOnly={isGithubReadOnly} spellCheck={false} aria-label={`Edit ${selectedFile.path}`} data-testid="textarea-file-explorer-editor" />
+               <FileCodeEditor key={`${source}:${selectedFile.path}`} filePath={selectedFile.path} value={draft} readOnly={isGithubReadOnly} onChange={setDraft} onCursorChange={setCursorPosition} />
             </div>
-            <div className="file-editor-card-foot"><span>{draft.length.toLocaleString()} characters · monospace editor</span>{!isGithubReadOnly && <button type="submit" className="file-save-button" disabled={saving || !isDirty} data-testid="button-save-file-explorer">{saving ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />}{saving ? 'Saving' : 'Save changes'}</button>}</div>
+             <div className="file-editor-card-foot"><span><strong>Ln {cursorPosition.line}, Col {cursorPosition.column}</strong><span className="file-editor-status-separator" />{draft.length.toLocaleString()} characters<span className="file-editor-status-separator" />{source === 'github' ? 'Read-only' : isDirty ? 'Unsaved' : 'Saved'}<span className="file-editor-language">{editorFileKind}</span></span>{!isGithubReadOnly && <button type="submit" className="file-save-button" disabled={saving || !isDirty} data-testid="button-save-file-explorer">{saving ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />}{saving ? 'Saving' : 'Save changes'}</button>}</div>
           </form> : <div className="file-editor-empty"><div className="file-editor-empty-orb"><Code2 size={24} /></div><span className="file-explorer-eyebrow">{source === 'workspace' ? 'WORKSPACE EDITOR' : 'GITHUB VIEWER'}</span><h2>Select a file to begin</h2><p>{source === 'workspace' ? 'Open any text file from the tree to edit it safely. Every change passes through the existing authenticated workspace API.' : 'Browse repository source without leaving the workspace. GitHub files are intentionally read-only on this surface.'}</p><div className="file-editor-empty-hint"><span className="keyboard-hint">⌘</span><span>Choose a file from the tree</span></div></div>}
         </section>
       </section>
