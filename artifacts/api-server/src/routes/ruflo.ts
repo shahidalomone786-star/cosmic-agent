@@ -69,7 +69,8 @@ import {
   type RufloSpecializedInspectionFile,
   type RufloSpecializedInspectRequest,
 } from "../ruflo/ruflo-specialized-agents";
-import { InMemoryRufloJobStore, RufloJobManager, type RufloJobRecord } from "../ruflo/ruflo-jobs";
+import { RufloJobManager, type RufloJobRecord } from "../ruflo/ruflo-jobs";
+import { DurableRufloJobStore, enforceUserRateLimit, listGovernanceAudit, rateLimitPolicy, recordGovernanceAudit, resolveWorkspaceAccess, UserRateLimitError } from "../ruflo/phase13-governance";
 import {
   parseAgentAuth,
   RufloSwarmError,
@@ -196,6 +197,7 @@ type RufloPublicAgentExecution = {
 
 type RuntimeEntry = {
   ownerId: string;
+  workspaceOwnerId: string;
   model: string;
   capability: RufloCapabilityClass;
   routing: RufloRoutingDecision;
@@ -231,8 +233,10 @@ const router: IRouter = Router();
 const runtimeSessions = new Map<string, RuntimeEntry>();
 const persistedEvents = new Map<string, Set<string>>();
 const rufloExecutionLocks = new Set<string>();
+const durableJobStore = new DurableRufloJobStore();
+void durableJobStore.recoverInterrupted().catch((error) => logger.warn({ err: error }, "Ruflo job recovery could not complete."));
 const rufloJobManager = new RufloJobManager({
-  store: new InMemoryRufloJobStore(),
+  store: durableJobStore,
   maxConcurrentJobs: 2,
   maxQueuedJobs: 16,
   defaultMaxRetries: 1,
@@ -609,8 +613,13 @@ router.get("/ruflo/memory", async (req, res) => {
   const requestedLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : 12;
   const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(24, Math.floor(requestedLimit))) : 12;
   try {
+    const workspace = await resolveWorkspaceAccess(userId, projectId);
+    if (!workspace) {
+      res.status(404).json({ error: "Workspace project not found or access is not granted.", code: "workspace_not_found" });
+      return;
+    }
     const projectKey = projectMemoryKey({ projectId });
-    const memories = await rufloMemoryStore.retrieveRelevant(userId, projectKey, { query, limit });
+    const memories = await rufloMemoryStore.retrieveRelevant(workspace.ownerId, projectKey, { query, limit });
     res.json({
       projectKey,
       memories: memories.map((memory) => ({
@@ -654,10 +663,16 @@ router.post("/ruflo/sessions", async (req, res) => {
   }
 
   try {
+    const workspace = repository ? undefined : await resolveWorkspaceAccess(userId, projectId);
+    if (!repository && !workspace) {
+      res.status(404).json({ error: "Workspace project not found or access is not granted.", code: "workspace_not_found" });
+      return;
+    }
+    const workspaceOwnerId = workspace?.ownerId ?? userId;
     const projectKey = projectMemoryKey({ projectId, repository });
     let memory: RufloMemory[] = [];
     try {
-      memory = await rufloMemoryStore.retrieveRelevant(userId, projectKey, { query: task, limit: 12 });
+      memory = await rufloMemoryStore.retrieveRelevant(workspaceOwnerId, projectKey, { query: task, limit: 12 });
     } catch (error) {
       logger.warn({ err: error, userId, projectKey }, "Ruflo memory retrieval skipped");
     }
@@ -708,6 +723,7 @@ router.post("/ruflo/sessions", async (req, res) => {
     };
     const entry: RuntimeEntry = {
       ownerId: userId,
+      workspaceOwnerId,
       model: routing.primary.model.id,
       capability: routing.capability,
       routing,
@@ -759,7 +775,7 @@ router.post("/ruflo/sessions", async (req, res) => {
       budget,
       costTracker,
       repository,
-      workspace: repository ? undefined : { userId, projectId },
+      workspace: repository ? undefined : { userId: workspaceOwnerId, projectId },
       selectedFiles,
       memoryContext: formatMemoryContext(memory),
       onUpdate: (session) => {
@@ -833,7 +849,7 @@ router.post("/ruflo/sessions", async (req, res) => {
               },
               repository,
               ownerId: userId,
-              workspace: repository ? undefined : { userId, projectId },
+              workspace: repository ? undefined : { userId: workspaceOwnerId, projectId },
             }),
           });
           current.agentExecutions = preparation.executions;
@@ -858,7 +874,7 @@ router.post("/ruflo/sessions", async (req, res) => {
           publishLive(session.id, "session_failed", "failed", { code: current.error.code, message: current.error.message });
         }
       }
-      await rememberRufloSessionFacts(userId, projectKey, session);
+      await rememberRufloSessionFacts(workspaceOwnerId, projectKey, session);
       if (current && current.memoryFactCount < memory.length) {
         current.memoryFactCount = memory.length;
         publishLive(session.id, "memory_learned", "completed", { count: current.memoryFactCount, bounded: true });
@@ -1009,12 +1025,17 @@ router.post("/ruflo/sessions/:sessionId/specialized", async (req, res) => {
   };
 
   try {
+    enforceUserRateLimit(userId, "job_create");
+    const idempotencyKey = typeof req.headers["idempotency-key"] === "string"
+      ? req.headers["idempotency-key"].slice(0, 200)
+      : typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey.slice(0, 200) : undefined;
     const job = await rufloJobManager.enqueue({
       ownerId: userId,
       sessionId,
       kind: "specialized_agents",
       maxRetries: 1,
       maxRuntimeMs: 120_000,
+      idempotencyKey,
       execute: async ({ signal }) => {
         for (const role of roles) publishLive(sessionId, "agent_selected", "queued", { role, specialized: true });
         const result = await runRufloSpecializedDag({
@@ -1035,7 +1056,7 @@ router.post("/ruflo/sessions/:sessionId/specialized", async (req, res) => {
             },
             repository: entry.repository,
             ownerId: userId,
-            workspace: entry.repository ? undefined : { userId, projectId: entry.projectId },
+            workspace: entry.repository ? undefined : { userId: entry.workspaceOwnerId, projectId: entry.projectId },
           }),
           git: entry.repository
             ? async () => {
@@ -1091,8 +1112,17 @@ router.post("/ruflo/sessions/:sessionId/specialized", async (req, res) => {
     entry.jobs = [...entry.jobs, job.id].slice(-16);
     res.status(202).json({ job, specializedAgents: roles });
   } catch (error) {
+    if (error instanceof UserRateLimitError) {
+      res.status(429).setHeader("Retry-After", error.retryAfterSeconds).json({ error: error.message, code: "rate_limited" });
+      return;
+    }
     res.status(429).json({ error: publicError(error), code: "specialized_job_rejected" });
   }
+});
+
+router.get("/ruflo/jobs", async (req, res) => {
+  const requested = typeof req.query.limit === "string" ? Number(req.query.limit) : 100;
+  res.json({ jobs: await durableJobStore.list(req.authUser!.id, Number.isFinite(requested) ? requested : 100) });
 });
 
 router.get("/ruflo/jobs/:jobId", async (req, res) => {
@@ -1102,6 +1132,10 @@ router.get("/ruflo/jobs/:jobId", async (req, res) => {
     return;
   }
   res.json(job);
+});
+
+router.get("/ruflo/governance", async (req, res) => {
+  res.json({ rateLimits: rateLimitPolicy(), audit: await listGovernanceAudit(req.authUser!.id) });
 });
 
 router.post("/ruflo/jobs/:jobId/cancel", async (req, res) => {

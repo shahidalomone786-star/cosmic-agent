@@ -1,5 +1,5 @@
 import { index, uniqueIndex, pgEnum, pgTable, integer, real, text, timestamp, boolean, jsonb } from "drizzle-orm/pg-core";
-import { usersTable } from "./auth";
+import { usersTable, workspaceProjectsTable } from "./auth";
 
 export const rufloSessionStatusEnum = pgEnum("ruflo_session_status", [
   "created",
@@ -119,6 +119,7 @@ export const rufloAgentStatusEnum = pgEnum("ruflo_agent_status", ["active", "idl
 export const rufloSwarmMessageStatusEnum = pgEnum("ruflo_swarm_message_status", ["queued", "delivered", "acknowledged"]);
 export const rufloSwarmTaskStatusEnum = pgEnum("ruflo_swarm_task_status", ["pending", "in_progress", "completed", "failed", "cancelled"]);
 export const rufloConsensusStatusEnum = pgEnum("ruflo_consensus_status", ["open", "reached", "rejected", "conflict"]);
+export const rufloJobStatusEnum = pgEnum("ruflo_job_status", ["queued", "running", "completed", "failed", "cancelled", "dead_letter"]);
 
 export const rufloSwarmsTable = pgTable(
   "ruflo_swarms",
@@ -272,5 +273,55 @@ export const rufloConsensusTable = pgTable(
   },
   (table) => ({
     swarmStatusIdx: index("ruflo_consensus_swarm_status_idx").on(table.swarmId, table.status),
+  }),
+);
+
+export const rufloJobsTable = pgTable(
+  "ruflo_jobs",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+    sessionId: text("session_id").notNull().references(() => rufloSessionsTable.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    status: rufloJobStatusEnum("status").notNull().default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    maxRetries: integer("max_retries").notNull().default(1),
+    maxRuntimeMs: integer("max_runtime_ms").notNull(),
+    idempotencyKey: text("idempotency_key"),
+    error: text("error"),
+    resultSummary: text("result_summary"),
+    durationMs: integer("duration_ms"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    estimatedCostUsd: real("estimated_cost_usd"),
+    deadLetteredAt: timestamp("dead_lettered_at", { withTimezone: true }),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    ownerStatusIdx: index("ruflo_jobs_owner_status_idx").on(table.ownerId, table.status, table.createdAt),
+    ownerIdempotencyUnique: uniqueIndex("ruflo_jobs_owner_idempotency_unique").on(table.ownerId, table.idempotencyKey),
+  }),
+);
+
+export const rufloGovernanceAuditTable = pgTable(
+  "ruflo_governance_audit",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").references(() => workspaceProjectsTable.id, { onDelete: "cascade" }),
+    action: text("action").notNull(),
+    resourceType: text("resource_type").notNull(),
+    resourceId: text("resource_id"),
+    status: text("status").notNull(),
+    metadata: jsonb("metadata").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userCreatedIdx: index("ruflo_governance_audit_user_created_idx").on(table.userId, table.createdAt),
+    workspaceCreatedIdx: index("ruflo_governance_audit_workspace_created_idx").on(table.workspaceId, table.createdAt),
   }),
 );

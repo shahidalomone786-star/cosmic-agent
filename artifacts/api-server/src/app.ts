@@ -5,6 +5,7 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 import cookieParser from "cookie-parser";
 import { authMiddleware } from "./middlewares/auth-middleware";
+import { enforceUserRateLimit, UserRateLimitError } from "./ruflo/phase13-governance";
 
 const app: Express = express();
 
@@ -32,6 +33,22 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(authMiddleware);
+app.use((req, res, next) => {
+  if (!req.authUser || req.path.startsWith("/health") || req.path.startsWith("/auth/")) {
+    next();
+    return;
+  }
+  try {
+    enforceUserRateLimit(req.authUser.id, "api");
+    next();
+  } catch (error) {
+    if (error instanceof UserRateLimitError) {
+      res.status(429).setHeader("Retry-After", error.retryAfterSeconds).json({ error: error.message, code: "rate_limited" });
+      return;
+    }
+    next(error);
+  }
+});
 
 app.use("/api", router);
 

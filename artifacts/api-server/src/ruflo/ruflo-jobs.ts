@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export type RufloJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type RufloJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "dead_letter";
 
 export type RufloJobRecord = {
   id: string;
@@ -17,6 +17,13 @@ export type RufloJobRecord = {
   updatedAt: string;
   startedAt?: string;
   completedAt?: string;
+  idempotencyKey?: string;
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  estimatedCostUsd?: number;
+  deadLetteredAt?: string;
+  nextAttemptAt?: string;
 };
 
 export type RufloJobContext = {
@@ -28,6 +35,8 @@ export type RufloJobStore = {
   create: (job: RufloJobRecord) => Promise<void>;
   update: (job: RufloJobRecord) => Promise<void>;
   get: (ownerId: string, jobId: string) => Promise<RufloJobRecord | undefined>;
+  list?: (ownerId: string, limit?: number) => Promise<RufloJobRecord[]>;
+  findByIdempotency?: (ownerId: string, idempotencyKey: string) => Promise<RufloJobRecord | undefined>;
 };
 
 export type RufloJobManagerOptions = {
@@ -53,6 +62,11 @@ export class InMemoryRufloJobStore implements RufloJobStore {
   async get(ownerId: string, jobId: string): Promise<RufloJobRecord | undefined> {
     const job = this.jobs.get(jobId);
     return job && job.ownerId === ownerId ? cloneJob(job) : undefined;
+  }
+
+  async findByIdempotency(ownerId: string, idempotencyKey: string): Promise<RufloJobRecord | undefined> {
+    const job = [...this.jobs.values()].find((candidate) => candidate.ownerId === ownerId && candidate.idempotencyKey === idempotencyKey);
+    return job ? cloneJob(job) : undefined;
   }
 }
 
@@ -84,8 +98,13 @@ export class RufloJobManager {
     execute: (context: RufloJobContext) => Promise<unknown>;
     maxRetries?: number;
     maxRuntimeMs?: number;
+    idempotencyKey?: string;
   }): Promise<RufloJobRecord> {
     if (this.queue.length >= this.maxQueuedJobs) throw new RufloJobError("queue_full", "Ruflo's bounded job queue is full.");
+    if (input.idempotencyKey && this.options.store.findByIdempotency) {
+      const existing = await this.options.store.findByIdempotency(input.ownerId, input.idempotencyKey);
+      if (existing) return cloneJob(existing);
+    }
     const now = new Date().toISOString();
     const job: RufloJobRecord = {
       id: randomUUID(),
@@ -98,6 +117,7 @@ export class RufloJobManager {
       maxRuntimeMs: boundedInteger(input.maxRuntimeMs, 1_000, 120_000, this.defaultMaxRuntimeMs),
       createdAt: now,
       updatedAt: now,
+      idempotencyKey: input.idempotencyKey?.slice(0, 200),
     };
     await this.options.store.create(job);
     this.queue.push({ job, execute: input.execute, controller: new AbortController() });
@@ -173,6 +193,7 @@ export class RufloJobManager {
         throw new Error("Ruflo job exceeded its runtime limit.");
       }
       job.status = "completed";
+      job.durationMs = Date.now() - new Date(job.startedAt ?? job.updatedAt).getTime();
       job.resultSummary = summarizeResult(result);
       job.updatedAt = new Date().toISOString();
       job.completedAt = job.updatedAt;
@@ -184,12 +205,17 @@ export class RufloJobManager {
       if (job.attempts <= job.maxRetries) {
         job.status = "queued";
         job.error = sanitize(message);
+        const backoffMs = Math.min(30_000, 250 * 2 ** Math.max(0, job.attempts - 1));
+        job.nextAttemptAt = new Date(Date.now() + backoffMs).toISOString();
         job.updatedAt = new Date().toISOString();
         await this.persist(job);
         this.options.onState?.(cloneJob(job), "retrying");
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
         this.queue.push({ ...item, controller: new AbortController() });
+        void this.pump();
       } else {
         job.status = "failed";
+        job.durationMs = Date.now() - new Date(job.startedAt ?? job.updatedAt).getTime();
         job.error = sanitize(message);
         job.updatedAt = new Date().toISOString();
         job.completedAt = job.updatedAt;

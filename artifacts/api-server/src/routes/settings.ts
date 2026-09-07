@@ -8,11 +8,31 @@ import { listRufloAuditRecords } from "../ruflo/ruflo-runtime";
 import { buildControlCenterSnapshot } from "../ruflo/ruflo-control-center";
 import { createUserSecret, deleteUserSecret, listUserSecrets, rotateUserSecret, SecretNameConflictError } from "../lib/user-secrets";
 import { rufloToolAuditLog } from "../ruflo/ruflo-audit";
+import { canManageWorkspace, canWriteWorkspace, enforceUserRateLimit, getWorkspaceAccess, recordGovernanceAudit, UserRateLimitError } from "../ruflo/phase13-governance";
 
 const router: IRouter = Router();
 const safe = (status: "connected" | "invalid" | "rate_limited" | "unavailable") => ({ connected: status === "connected", status });
 const secretValue = (body: unknown): string => typeof (body as { value?: unknown })?.value === "string" ? (body as { value: string }).value : "";
 const secretName = (body: unknown): string => typeof (body as { name?: unknown })?.name === "string" ? (body as { name: string }).name.trim() : "";
+const projectScope = (req: { query: unknown; body?: unknown }): string | undefined => {
+  const query = req.query as Record<string, unknown>;
+  const body = req.body as Record<string, unknown> | undefined;
+  return typeof query?.projectId === "string" ? query.projectId : typeof body?.projectId === "string" ? body.projectId : undefined;
+};
+async function secretScope(req: { authUser?: { id: string }; query: unknown; body?: unknown }, res: any, write = false) {
+  const projectId = projectScope(req);
+  if (!projectId) return { workspaceId: undefined, role: "owner" as const };
+  const access = await getWorkspaceAccess(req.authUser!.id, projectId);
+  if (!access) { res.status(404).json({ error: "Workspace project not found.", code: "workspace_not_found" }); return undefined; }
+  if (write && !canWriteWorkspace(access.role)) { res.status(403).json({ error: "Your workspace role is read-only.", code: "workspace_forbidden" }); return undefined; }
+  return { workspaceId: access.workspaceId, role: access.role };
+}
+function parseSecretDate(value: unknown): Date | null | undefined {
+  if (value === null || value === undefined || value === "") return value === null ? null : undefined;
+  if (typeof value !== "string") return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
 
 function recordSecretAudit(userId: string, action: "create" | "rotate" | "delete", secretId: string, riskLevel: "LOW" | "DESTRUCTIVE" = "LOW"): void {
   rufloToolAuditLog.record({
@@ -77,7 +97,9 @@ router.delete("/settings/github", async (req, res): Promise<void> => {
 router.get("/settings/secrets", async (req, res): Promise<void> => {
   const user = requireAuthenticatedUser(req, res);
   if (!user) return;
-  res.json(await listUserSecrets(user.id));
+  const scope = await secretScope(req, res);
+  if (!scope) return;
+  res.json(await listUserSecrets(user.id, scope.workspaceId));
 });
 
 router.post("/settings/secrets", async (req, res): Promise<void> => {
@@ -90,10 +112,15 @@ router.post("/settings/secrets", async (req, res): Promise<void> => {
     return;
   }
   try {
-    const secret = await createUserSecret(user.id, name, value);
+    enforceUserRateLimit(user.id, "secret");
+    const scope = await secretScope(req, res, true);
+    if (!scope) return;
+    const secret = await createUserSecret(user.id, name, value, scope.workspaceId, parseSecretDate(req.body?.expiresAt), parseSecretDate(req.body?.rotationReminderAt));
     recordSecretAudit(user.id, "create", secret.id);
+    await recordGovernanceAudit({ userId: user.id, workspaceId: scope.workspaceId, action: "secret.create", resourceType: "secret", resourceId: secret.id });
     res.status(201).json(secret);
   } catch (error) {
+    if (error instanceof UserRateLimitError) { res.status(429).setHeader("Retry-After", error.retryAfterSeconds).json({ error: error.message, code: "rate_limited" }); return; }
     if (error instanceof SecretNameConflictError) {
       res.status(409).json({ error: "A secret with this name already exists." });
       return;
@@ -110,24 +137,32 @@ router.post("/settings/secrets/:secretId/rotate", async (req, res): Promise<void
     res.status(400).json({ error: "Enter a replacement value." });
     return;
   }
-  const secret = await rotateUserSecret(user.id, req.params.secretId, value);
+  try { enforceUserRateLimit(user.id, "secret"); } catch (error) { if (error instanceof UserRateLimitError) { res.status(429).setHeader("Retry-After", error.retryAfterSeconds).json({ error: error.message, code: "rate_limited" }); return; } throw error; }
+  const scope = await secretScope(req, res, true);
+  if (!scope) return;
+  const secret = await rotateUserSecret(user.id, req.params.secretId, value, scope.workspaceId, parseSecretDate(req.body?.expiresAt), parseSecretDate(req.body?.rotationReminderAt));
   if (!secret) {
     res.status(404).json({ error: "Secret not found." });
     return;
   }
   recordSecretAudit(user.id, "rotate", secret.id);
+  await recordGovernanceAudit({ userId: user.id, workspaceId: scope.workspaceId, action: "secret.rotate", resourceType: "secret", resourceId: secret.id });
   res.json(secret);
 });
 
 router.delete("/settings/secrets/:secretId", async (req, res): Promise<void> => {
   const user = requireAuthenticatedUser(req, res);
   if (!user) return;
-  const deleted = await deleteUserSecret(user.id, req.params.secretId);
+  try { enforceUserRateLimit(user.id, "secret"); } catch (error) { if (error instanceof UserRateLimitError) { res.status(429).setHeader("Retry-After", error.retryAfterSeconds).json({ error: error.message, code: "rate_limited" }); return; } throw error; }
+  const scope = await secretScope(req, res, true);
+  if (!scope || !canManageWorkspace(scope.role)) { if (scope) res.status(403).json({ error: "Only the workspace owner can delete a scoped secret.", code: "workspace_forbidden" }); return; }
+  const deleted = await deleteUserSecret(user.id, req.params.secretId, scope.workspaceId);
   if (!deleted) {
     res.status(404).json({ error: "Secret not found." });
     return;
   }
   recordSecretAudit(user.id, "delete", req.params.secretId, "DESTRUCTIVE");
+  await recordGovernanceAudit({ userId: user.id, workspaceId: scope.workspaceId, action: "secret.delete", resourceType: "secret", resourceId: req.params.secretId });
   res.status(204).send();
 });
 
@@ -136,7 +171,7 @@ router.get("/settings/control-center", async (req, res): Promise<void> => {
   if (!user) return;
 
   const github = await getGitHubCredentialStatus(user.id);
-  const secrets = await listUserSecrets(user.id);
+  const secrets = await listUserSecrets(user.id, projectScope(req));
   const registry = createDefaultRufloToolRegistry();
   const tools = registry.list();
   const auditRecords = listRufloAuditRecords({ userId: user.id });
